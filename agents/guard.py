@@ -110,6 +110,9 @@ class Guard:
         # Referencia temporal a todos los colectores (actualizada en decide)
         self._all_collectors = []
 
+        # Recompensas de eventos pendientes (aplicadas en el siguiente decide())
+        self._pending_reward = 0.0
+
     # ===================================================================
     # PERCEPCIÓN
     # ===================================================================
@@ -317,7 +320,8 @@ class Guard:
         # -- ESCORT -----------------------------------------------------
         if collector_vulnerable and collector_carrying:
             biases['ESCORT'] += HEUR_ESCORT_VULNERABLE
-        if game_context.get('collector_has_kit', False):
+        # El bonus por kit solo aplica si hay algún riesgo (enemigo visible o zona peligrosa)
+        if game_context.get('collector_has_kit', False) and (enemy_near or risk_level >= 1):
             biases['ESCORT'] += HEUR_ESCORT_HAS_KIT
         if guards_near_collector >= 2:
             biases['ESCORT'] += HEUR_ESCORT_REDUNDANT
@@ -331,6 +335,9 @@ class Guard:
             biases['SCOUT'] += HEUR_SCOUT_EARLY_BONUS
         if not collector_vulnerable:
             biases['SCOUT'] += HEUR_SCOUT_NO_ESCORT_NEEDED
+        # No explorar si hay enemigos visibles — priorizar respuesta táctica
+        if enemy_near:
+            biases['SCOUT'] -= 90
 
         # -- DEFEND_ZONE ------------------------------------------------
         if game_context.get('tower_count', 0) > 0:
@@ -395,9 +402,11 @@ class Guard:
 
         biases = self.calculate_heuristic_biases(state, phase, game_context)
 
-        # Q-update con transición anterior
+        # Q-update con transición anterior + eventos pendientes del tick anterior
         if self.prev_state is not None and self.prev_action is not None:
-            self.q_learning.update(self.prev_state, self.prev_action, 0.0, state)
+            step_reward = self._pending_reward
+            self._pending_reward = 0.0
+            self.q_learning.update(self.prev_state, self.prev_action, step_reward, state)
 
         action = self.q_learning.get_action(state, biases)
         self.current_action = action
@@ -694,12 +703,10 @@ class Guard:
 
     def receive_reward(self, event):
         """
-        Registra la recompensa en la Q-table para el último (state, action).
+        Acumula la recompensa del evento para aplicarla en el siguiente decide(),
+        donde el next_state real ya estará disponible.
         """
-        if self.prev_state is None or self.prev_action is None:
-            return
-        reward = self.get_reward(event)
-        self.q_learning.update(self.prev_state, self.prev_action, reward, self.prev_state)
+        self._pending_reward += self.get_reward(event)
 
     # ===================================================================
     # MUERTE

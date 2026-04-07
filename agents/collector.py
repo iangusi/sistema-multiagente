@@ -108,6 +108,12 @@ class Collector:
         self.ticks_since_progress   = 0
         self._prev_resources_carried = 0
         self._prev_explored_count    = 0
+        bx, by = BASE_POSITION
+        px, py = position
+        self._prev_dist_to_base = abs(px - bx) + abs(py - by)
+
+        # Recompensas de eventos pendientes (aplicadas en el siguiente decide())
+        self._pending_reward = 0.0
 
     # ===================================================================
     # PERCEPCIÓN
@@ -281,7 +287,7 @@ class Collector:
                 biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_EMPTY_BONUS
             if risk_level >= 2 and not guard_near:
                 biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_NO_GUARD
-            if phase == "MID":
+            if phase == "MID" and not carrying:
                 biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_MID_BONUS
 
         # -- EXPLORE ----------------------------------------------------
@@ -538,12 +544,10 @@ class Collector:
 
     def receive_reward(self, event):
         """
-        Registra la recompensa en la Q-table para el último (state, action).
+        Acumula la recompensa del evento para aplicarla en el siguiente decide(),
+        donde el next_state real ya estará disponible.
         """
-        if self.prev_state is None or self.prev_action is None:
-            return
-        reward = self.get_reward(event)
-        self.q_learning.update(self.prev_state, self.prev_action, reward, self.prev_state)
+        self._pending_reward += self.get_reward(event)
 
     def _compute_step_reward(self, action, guard_near):
         """Calcula recompensa de paso basada en tracking de progreso."""
@@ -623,11 +627,19 @@ class Collector:
         else:
             self.current_action_streak = 0
 
-        # Detectar progreso real (recursos o exploración)
+        # Detectar progreso real (recursos, exploración, o acercarse a la base)
         explored_count = self.shared_data.get('explored_count', 0)
+        bx, by = BASE_POSITION
+        px, py = self.position
+        dist_to_base = abs(px - bx) + abs(py - by)
+        approaching_base = (
+            self.carrying_resources > 0
+            and dist_to_base < self._prev_dist_to_base
+        )
         has_progress = (
             self.carrying_resources != self._prev_resources_carried
             or explored_count > self._prev_explored_count + 2
+            or approaching_base
         )
         if has_progress:
             self.ticks_since_progress        = 0
@@ -635,6 +647,7 @@ class Collector:
             self._prev_explored_count        = explored_count
         else:
             self.ticks_since_progress += 1
+        self._prev_dist_to_base = dist_to_base
 
     # ===================================================================
     # TOMA DE DECISIÓN
@@ -676,9 +689,11 @@ class Collector:
         # Actualizar tracking ANTES del Q-update (usa acción anterior)
         self._update_progress_tracking(self.current_action)
 
-        # Q-update con transición anterior + recompensa de paso
+        # Q-update con transición anterior + recompensa de paso + eventos pendientes
         if self.prev_state is not None and self.prev_action is not None:
             step_reward = self._compute_step_reward(self.prev_action, guard_near)
+            step_reward += self._pending_reward
+            self._pending_reward = 0.0
             self.q_learning.update(self.prev_state, self.prev_action, step_reward, state)
 
         action = self.q_learning.get_action(state, biases)
