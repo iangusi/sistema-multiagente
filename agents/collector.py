@@ -316,13 +316,18 @@ class Collector:
             biases['BUILD_TOWER'] = -200.0
 
         # -- ANTI-ESTANCAMIENTO ----------------------------------------
+        stagnation = game_context['ticks_since_progress']
+
+        # El streak solo penaliza cuando hay estancamiento real (sin progreso).
+        # Si ticks_since_progress == 0 el agente avanza hacia un objetivo
+        # productivo (acercándose a la base, explorando, recolectando):
+        # penalizar la acción repetida sería romper un comportamiento correcto.
         streak = game_context['current_action_streak']
-        if streak > STAGNATION_THRESHOLD and self.current_action in biases:
+        if streak > STAGNATION_THRESHOLD and stagnation > 0 and self.current_action in biases:
             biases[self.current_action] -= (
                 STAGNATION_PENALTY_RATE * (streak - STAGNATION_THRESHOLD)
             )
 
-        stagnation = game_context['ticks_since_progress']
         if stagnation > STAGNATION_THRESHOLD:
             biases['GO_TO_RESOURCE'] += stagnation * 3
             biases['EXPLORE']        += stagnation * 2

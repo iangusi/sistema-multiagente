@@ -214,7 +214,7 @@ try:
     )
 
     # Estado: lleno + recursos conocidos + fase MID → debe elegir RETURN_TO_BASE
-    state_full = (0, 1, 1, 0, 0, 0, 0, 1, 0, 1)  # enemy=0,carry=1,full=1,...,resources_known=1,near_base=0,explored_MID
+    state_full = (0, 1, 1, 0, 0, 0, 0, 1, 0, 1)
     biases_full = c3.calculate_heuristic_biases(
         state_full, "MID",
         {'carrying_resources': 10, 'carrying_capacity': 10,
@@ -228,6 +228,22 @@ try:
     else:
         fail("Lleno+MID no elige RETURN_TO_BASE",
              f"eligio={best_full}, biases={biases_full}")
+
+    # Estado: lleno + streak=30 + ticks_since_progress=0 (regreso productivo)
+    # El streak NO debe romper RETURN_TO_BASE si hay progreso real
+    biases_streak = c3.calculate_heuristic_biases(
+        state_full, "MID",
+        {'carrying_resources': 10, 'carrying_capacity': 10,
+         'explored_percent': 0.5, 'tower_count': 0,
+         'num_alive_collectors': 5, 'current_action_streak': 30,
+         'ticks_since_progress': 0, 'guard_near': 0}
+    )
+    best_streak = max(biases_streak, key=lambda a: biases_streak[a])
+    if best_streak == 'RETURN_TO_BASE':
+        ok(f"Streak=30 + progreso=0 -> RETURN_TO_BASE mantiene prioridad (bias={biases_streak['RETURN_TO_BASE']})")
+    else:
+        fail("Streak alto con progreso real rompe RETURN_TO_BASE (bug residual de stagnation)",
+             f"eligio={best_streak}, RETURN={biases_streak['RETURN_TO_BASE']}, GO_RES={biases_streak['GO_TO_RESOURCE']}")
 
     # Estado: vacio + recursos conocidos + fase MID -> debe elegir GO_TO_RESOURCE
     state_empty = (0, 0, 0, 0, 0, 0, 0, 1, 0, 1)
