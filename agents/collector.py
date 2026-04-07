@@ -278,7 +278,10 @@ class Collector:
             fill_ratio = game_context['carrying_resources'] / game_context['carrying_capacity']
             biases['RETURN_TO_BASE'] += int(HEUR_RETURN_PARTIAL_FACTOR * fill_ratio)
         else:
-            biases['RETURN_TO_BASE'] += HEUR_RETURN_EMPTY_PENALTY
+            # Si está vacío y ya está en la base, desincentivar regresar
+            # (evita que se quede merodeando). Fuera de la base, dejar que Q-learning decida.
+            if near_base:
+                biases['RETURN_TO_BASE'] -= 30
 
         # -- GO_TO_RESOURCE ---------------------------------------------
         if resources_known:
@@ -286,9 +289,12 @@ class Collector:
             if not carrying:
                 biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_EMPTY_BONUS
             if risk_level >= 2 and not guard_near:
-                biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_NO_GUARD
+                # Animar en lugar de penalizar: el Q-learning y FLEE manejan el peligro letal
+                biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_NO_GUARD  # +20
             if phase == "MID" and not carrying:
                 biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_MID_BONUS
+            elif phase == "LATE" and not carrying:
+                biases['GO_TO_RESOURCE'] += 50  # LATE: recolectar agresivamente
 
         # -- EXPLORE ----------------------------------------------------
         if explored_level == 0:
@@ -296,9 +302,17 @@ class Collector:
         if not resources_known:
             biases['EXPLORE'] += HEUR_EXPLORE_NO_RESOURCES_KNOWN
         if not guard_near and not tower_near:
-            biases['EXPLORE'] += HEUR_EXPLORE_NO_GUARD_PENALTY
+            # Penalización gradual según riesgo real — no bloquear en zonas seguras
+            if risk_level >= 2:
+                biases['EXPLORE'] += HEUR_EXPLORE_NO_GUARD_PENALTY   # -60
+            elif risk_level == 1:
+                biases['EXPLORE'] -= 20  # penalización moderada en riesgo medio
+            # risk_level == 0: zona segura, no penalizar
         if phase == "EARLY":
             biases['EXPLORE'] += HEUR_EXPLORE_EARLY_BONUS
+        # Bonus por explorar escoltado cuando aún no hay recursos conocidos
+        if guard_near and not resources_known:
+            biases['EXPLORE'] += 60
 
         # -- BUILD_TOWER ------------------------------------------------
         if has_build_kit:
@@ -360,13 +374,14 @@ class Collector:
                     continue
 
                 dist = abs(x - px) + abs(y - py)
+                # Celdas desconocidas no se penalizan por riesgo (son oportunidades)
                 risk = (self.risk_map[x][y] if self.known_map[x][y].get('explored', False)
-                        else RISK_UNEXPLORED)
+                        else 0.0)
                 other_heading = sum(
                     1 for c in all_collectors
                     if c is not self and c.is_alive and c.current_target == (x, y)
                 )
-                score = 100.0 - dist * 0.5 - risk * 20.0 - other_heading * 15.0
+                score = 100.0 - dist * 0.5 - risk * 8.0 - other_heading * 15.0
                 if score > best_score:
                     best_score = score
                     best_cell  = (x, y)
@@ -393,7 +408,8 @@ class Collector:
                 1 for c in all_collectors
                 if c is not self and c.is_alive and c.current_target == (rx, ry)
             )
-            score = res['amount'] - dist * 0.5 - risk * 10.0 - others_going * 5.0
+            size_bonus = min(10.0, res['amount'] / 5.0)
+            score = res['amount'] - dist * 0.5 - risk * 5.0 - others_going * 5.0 + size_bonus
             if score > best_score:
                 best_score    = score
                 best_resource = res
@@ -424,7 +440,14 @@ class Collector:
         guards = [a for a in visible_allies if a.__class__.__name__ == 'Guard']
         for g in guards:
             d = abs(g.position[0] - px) + abs(g.position[1] - py)
-            options.append({'pos': g.position, 'score': -d + 20.0})
+            # Bonus si el guardia está lejos de los enemigos (es un refugio real)
+            guard_safety = sum(
+                10.0
+                for enemy in visible_enemies
+                if (abs(enemy.position[0] - g.position[0])
+                    + abs(enemy.position[1] - g.position[1])) > 4
+            )
+            options.append({'pos': g.position, 'score': -d + 20.0 + guard_safety})
 
         d_base = abs(BASE_POSITION[0] - px) + abs(BASE_POSITION[1] - py)
         options.append({'pos': BASE_POSITION, 'score': -d_base + 10.0})

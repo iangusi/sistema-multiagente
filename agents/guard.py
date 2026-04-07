@@ -320,11 +320,11 @@ class Guard:
         # -- ESCORT -----------------------------------------------------
         if collector_vulnerable and collector_carrying:
             biases['ESCORT'] += HEUR_ESCORT_VULNERABLE
-        # El bonus por kit solo aplica si hay algún riesgo (enemigo visible o zona peligrosa)
-        if game_context.get('collector_has_kit', False) and (enemy_near or risk_level >= 1):
+        # Siempre escortar kit-holders: van a construir y son vulnerables solos
+        if game_context.get('collector_has_kit', False):
             biases['ESCORT'] += HEUR_ESCORT_HAS_KIT
         if guards_near_collector >= 2:
-            biases['ESCORT'] += HEUR_ESCORT_REDUNDANT
+            biases['ESCORT'] += HEUR_ESCORT_REDUNDANT  # -20: reducido para permitir agrupación
         if collector_near_base:
             biases['ESCORT'] += HEUR_ESCORT_COLLECTOR_AT_BASE
 
@@ -335,22 +335,37 @@ class Guard:
             biases['SCOUT'] += HEUR_SCOUT_EARLY_BONUS
         if not collector_vulnerable:
             biases['SCOUT'] += HEUR_SCOUT_NO_ESCORT_NEEDED
-        # No explorar si hay enemigos visibles — priorizar respuesta táctica
+        # Penalización gradual según distancia al enemigo — no bloquear exploración lejana
         if enemy_near:
-            biases['SCOUT'] -= 90
+            if distance_to_enemy == 0:    # enemigo muy cerca (<= 3 celdas)
+                biases['SCOUT'] -= 80
+            elif distance_to_enemy == 1:  # distancia media (4-6 celdas)
+                biases['SCOUT'] -= 40
+            # distance_to_enemy == 2 (> 6 celdas): no penalizar
 
         # -- DEFEND_ZONE ------------------------------------------------
         if game_context.get('tower_count', 0) > 0:
             biases['DEFEND_ZONE'] += HEUR_DEFEND_HAS_TOWERS
-        if risk_level >= 2:
+        # Priorizar INTERCEPT en combate directo, DEFEND_ZONE solo en riesgo sin combate
+        if enemy_near and distance_to_enemy == 0:
+            biases['INTERCEPT'] += 50
+            biases['DEFEND_ZONE'] -= 40
+        elif risk_level >= 2:
             biases['DEFEND_ZONE'] += HEUR_DEFEND_HIGH_RISK
 
         # -- INVESTIGATE ------------------------------------------------
-        if game_context.get('recent_enemy_sighting', False):
-            biases['INVESTIGATE'] += HEUR_INVESTIGATE_RECENT
+        ticks_ago = game_context.get('recent_enemy_ticks_ago', float('inf'))
+        if ticks_ago <= 3:
+            biases['INVESTIGATE'] += HEUR_INVESTIGATE_RECENT + 40  # muy reciente
+        elif ticks_ago <= 8:
+            biases['INVESTIGATE'] += HEUR_INVESTIGATE_RECENT       # moderadamente reciente
 
         # -- PATROL -----------------------------------------------------
         biases['PATROL'] += HEUR_PATROL_BASE
+        if risk_level >= 2:
+            biases['PATROL'] += 30  # patrullar más activamente en zona peligrosa
+        if collector_near_base:
+            biases['PATROL'] += 20  # proteger si hay collector cerca de base
 
         return biases
 
@@ -382,9 +397,9 @@ class Guard:
             1 for x in range(MAP_WIDTH) for y in range(MAP_HEIGHT)
             if self.known_map[x][y].get('last_known_type') == 'tower'
         )
-        recent_sighting = any(
-            current_tick - e['tick'] <= 5
-            for e in self.last_seen_enemies
+        recent_enemy_ticks_ago = min(
+            (current_tick - e['tick'] for e in self.last_seen_enemies),
+            default=float('inf')
         )
         collector_has_kit = any(
             getattr(c, 'has_build_kit', False) for c in visible_collectors
@@ -392,11 +407,11 @@ class Guard:
 
         phase = self._get_game_phase()
         game_context = {
-            'tower_count':           tower_count,
-            'recent_enemy_sighting': recent_sighting,
-            'collector_has_kit':     collector_has_kit,
+            'tower_count':              tower_count,
+            'recent_enemy_ticks_ago':   recent_enemy_ticks_ago,
+            'collector_has_kit':        collector_has_kit,
             'guards_near_my_collector': state[8],
-            'collector_near_base':   state[9],
+            'collector_near_base':      state[9],
             'escorted_collector_collected': False,  # simplificación
         }
 
@@ -464,6 +479,12 @@ class Guard:
             carrying = getattr(c, 'carrying_resources', 0)
             has_kit  = 1 if getattr(c, 'has_build_kit', False) else 0
             score    = has_kit * 100 + carrying * 50 - dist - risk * 10
+            # Prioridad máxima si el collector está en peligro inmediato
+            if any(
+                abs(e.position[0] - cx) + abs(e.position[1] - cy) <= 5
+                for e in visible_enemies
+            ):
+                score += 200
             if score > best_score:
                 best_score = score
                 best_c     = c

@@ -108,7 +108,7 @@ HEUR_RETURN_EMPTY_PENALTY = -80
 
 HEUR_GOTO_RESOURCE_BASE = 60
 HEUR_GOTO_RESOURCE_EMPTY_BONUS = 40
-HEUR_GOTO_RESOURCE_NO_GUARD = -30
+HEUR_GOTO_RESOURCE_NO_GUARD = 20   # bonus: animar recolección en zona peligrosa sin guardia
 HEUR_GOTO_RESOURCE_MID_BONUS = 30
 
 HEUR_EXPLORE_LOW_COVERAGE = 50
@@ -119,7 +119,7 @@ HEUR_EXPLORE_EARLY_BONUS = 40
 HEUR_BUILD_HAS_KIT = 100
 HEUR_BUILD_TOO_MANY_TOWERS = -80
 HEUR_BUILD_LAST_COLLECTOR = -150
-HEUR_BUILD_LOW_EXPLORATION = -60
+HEUR_BUILD_LOW_EXPLORATION = 40    # bonus: construir defensas en EARLY es crítico
 
 # Anti-estancamiento
 STAGNATION_THRESHOLD = 12
@@ -135,7 +135,7 @@ EARLY_GAME_FLEE_BONUS = 80
 # ============================================================
 HEUR_ESCORT_VULNERABLE = 100
 HEUR_ESCORT_HAS_KIT = 130
-HEUR_ESCORT_REDUNDANT = -60
+HEUR_ESCORT_REDUNDANT = -20   # reducido: no dispersar guardias tan agresivamente
 HEUR_ESCORT_COLLECTOR_AT_BASE = -40
 
 HEUR_ATTACK_IN_RANGE = 100
@@ -163,7 +163,7 @@ QL_ALPHA = 0.2
 QL_GAMMA = 0.9
 QL_EPSILON = 0.20
 QL_EPSILON_DECAY = 0.998
-QL_EPSILON_MIN = 0.08
+QL_EPSILON_MIN = 0.10  # mínimo más alto para mantener exploración en fases difíciles
 
 # ============================================================
 # RECOMPENSAS RL – RECOLECTOR
@@ -202,12 +202,12 @@ REWARD_GUARD_IDLE = -2
 # ============================================================
 # ENTRENAMIENTO POR CURRÍCULO
 # ============================================================
-TRAINING_EPISODES_PHASE_1 = 300
-TRAINING_EPISODES_PHASE_2 = 400
-TRAINING_EPISODES_PHASE_3 = 500
-TRAINING_EPISODES_PHASE_4 = 600
+TRAINING_EPISODES_PHASE_1 = 500   # más tiempo para converger sin hunters
+TRAINING_EPISODES_PHASE_2 = 500
+TRAINING_EPISODES_PHASE_3 = 600
+TRAINING_EPISODES_PHASE_4 = 700
 TRAINING_MAX_TICKS_PER_EPISODE = 3000
-TRAINING_EPSILON_RESET_FACTOR = 0.5
+TRAINING_EPSILON_RESET_FACTOR = 0.8  # reset más alto → más exploración al subir dificultad
 QTABLE_SAVE_PATH = "data/"
 
 # ============================================================
