@@ -3,7 +3,10 @@
     "allow": [
       "Bash(python tests.py)",
       "Bash(python -X utf8 tests.py)",
-      "Bash(python -c \"from agents.collector import Collector; from agents.guard import Guard; from utils.constants import *; print\\('OK'\\)\")"
+      "Bash(python -c \"from agents.collector import Collector; from agents.guard import Guard; from utils.constants import *; print\\('OK'\\)\")",
+      "Bash(find \"/c/Users/marse/OneDrive/Escritorio/escuela/UNIVERSIDAD/SM/Proyecto Final/project\" -name \"*.py\" -type f -exec grep -l \"receive_reward\" {} \\\\;)",
+      "Bash(grep -E \"\\\\.py$|^d\")",
+      "Bash(python -c \"from utils.constants import *; from agents.collector import Collector; from agents.guard import Guard; from environment import Environment; print\\('imports OK'\\)\")"
     ]
   }
 }

@@ -11,6 +11,7 @@ from utils.constants import (
     HUNTER_MIN_SPAWN_DISTANCE,
     RISK_UNEXPLORED, RISK_DECAY, RISK_DIFFUSION,
     RISK_ENEMY_WEIGHT, RISK_TOWER_REDUCTION,
+    REWARD_COLLECTOR_DIES_WHILE_ADJACENT,
     QL_ALPHA, QL_GAMMA, QL_EPSILON, QL_EPSILON_DECAY, QL_EPSILON_MIN,
     MAX_TOWERS_PER_EXPLORATION,
     CELL_SIZE, SIDEBAR_WIDTH, WINDOW_WIDTH, WINDOW_HEIGHT, FPS,
@@ -264,6 +265,12 @@ class Environment:
                 if amount > 0:
                     c.receive_reward('collect')
                     self.last_event = f'Recolector recoge {amount} recursos'
+                    # Notificar guardias cercanos: su protección fue efectiva
+                    for g in self.guards:
+                        if g.is_alive:
+                            dist_g = abs(g.position[0] - cx) + abs(g.position[1] - cy)
+                            if dist_g <= g.vision_range:
+                                g.receive_reward('protect_collector')
                     # Marcar como explorada la nueva posición de recurso
                     self.known_map[cx][cy]['explored'] = True
                     self.known_map[cx][cy]['last_known_type'] = 'resource'
@@ -425,6 +432,9 @@ class Environment:
                 target_type = target.__class__.__name__
                 if hasattr(killer, 'on_kill'):
                     killer.on_kill(target_type)
+                # Recompensa explícita para guardias que matan cazadores
+                if target_type == 'Hunter' and killer.__class__.__name__ == 'Guard':
+                    killer.receive_reward('kill_hunter')
                 self.last_event = f'{killer.__class__.__name__} eliminó a {target_type}'
 
             # Ejecutar muerte
@@ -442,11 +452,13 @@ class Environment:
                 agent.receive_reward('lose_resources')
             agent.receive_reward('die')
             agent.die()
-            # Notificar a guardias cercanos
+            # Notificar a guardias cercanos — castigo escalado por proximidad
             for g in self.guards:
                 if g.is_alive:
                     dist = (abs(g.position[0] - px) + abs(g.position[1] - py))
-                    if dist <= g.vision_range:
+                    if dist <= 2:
+                        g.receive_reward('collector_dies_while_adjacent')
+                    elif dist <= g.vision_range:
                         g.receive_reward('collector_dies_nearby')
         elif atype == 'Guard':
             agent.receive_reward('die')

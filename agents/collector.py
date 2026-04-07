@@ -265,9 +265,16 @@ class Collector:
 
         # -- FLEE (emergencia — siempre domina si aplica) ---------------
         if enemy_near:
-            biases['FLEE'] += HEUR_FLEE_ENEMY_NEAR
+            min_enemy_dist = game_context.get('min_enemy_dist', 0)
+            if min_enemy_dist <= 3:
+                flee_scale = 1.0       # muy cerca: dominante
+            elif min_enemy_dist <= 6:
+                flee_scale = 0.5       # distancia media: moderado
+            else:
+                flee_scale = 0.2       # lejos: solo sugerencia
+            biases['FLEE'] += HEUR_FLEE_ENEMY_NEAR * flee_scale
             if not guard_near:
-                biases['FLEE'] += HEUR_FLEE_ENEMY_NO_GUARD
+                biases['FLEE'] += HEUR_FLEE_ENEMY_NO_GUARD * flee_scale
         if phase == "EARLY" and enemy_near:
             biases['FLEE'] += EARLY_GAME_FLEE_BONUS
 
@@ -301,15 +308,16 @@ class Collector:
             biases['EXPLORE'] += HEUR_EXPLORE_LOW_COVERAGE
         if not resources_known:
             biases['EXPLORE'] += HEUR_EXPLORE_NO_RESOURCES_KNOWN
-        if not guard_near and not tower_near:
-            # Penalización gradual según riesgo real — no bloquear en zonas seguras
-            if risk_level >= 2:
-                biases['EXPLORE'] += HEUR_EXPLORE_NO_GUARD_PENALTY   # -60
-            elif risk_level == 1:
-                biases['EXPLORE'] -= 20  # penalización moderada en riesgo medio
-            # risk_level == 0: zona segura, no penalizar
         if phase == "EARLY":
+            # En EARLY la exploración domina: no penalizar por riesgo
             biases['EXPLORE'] += HEUR_EXPLORE_EARLY_BONUS
+        else:
+            # MID/LATE: penalizar si no hay cobertura cercana
+            if not guard_near and not tower_near:
+                if risk_level >= 2:
+                    biases['EXPLORE'] += HEUR_EXPLORE_NO_GUARD_PENALTY   # -60
+                elif risk_level == 1:
+                    biases['EXPLORE'] -= 20
         # Bonus por explorar escoltado cuando aún no hay recursos conocidos
         if guard_near and not resources_known:
             biases['EXPLORE'] += 60
@@ -327,7 +335,7 @@ class Collector:
             if explored_level == 0:
                 biases['BUILD_TOWER'] += HEUR_BUILD_LOW_EXPLORATION
         else:
-            biases['BUILD_TOWER'] = -200.0
+            biases['BUILD_TOWER'] -= 50.0
 
         # -- ANTI-ESTANCAMIENTO ----------------------------------------
         stagnation = game_context['ticks_since_progress']
@@ -701,6 +709,13 @@ class Collector:
         guard_near      = state[4]
         phase           = self._get_game_phase()
 
+        px_self, py_self = self.position
+        min_enemy_dist = min(
+            (abs(e.position[0] - px_self) + abs(e.position[1] - py_self)
+             for e in visible_enemies),
+            default=999
+        )
+
         game_context = {
             'carrying_resources':  self.carrying_resources,
             'carrying_capacity':   self.carrying_capacity,
@@ -710,6 +725,7 @@ class Collector:
             'current_action_streak': self.current_action_streak,
             'ticks_since_progress':  self.ticks_since_progress,
             'guard_near':           guard_near,
+            'min_enemy_dist':       min_enemy_dist,
         }
 
         biases = self.calculate_heuristic_biases(state, phase, game_context)

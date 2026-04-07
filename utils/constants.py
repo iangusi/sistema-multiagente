@@ -184,12 +184,13 @@ REWARD_EXPLORE_WITH_ESCORT = 5
 # ============================================================
 # RECOMPENSAS RL – GUARDIA
 # ============================================================
-REWARD_KILL_HUNTER = 8
+REWARD_KILL_HUNTER = 15
 REWARD_PROTECT_COLLECTOR = 10
 REWARD_INTERCEPT = 6
 REWARD_DEFEND_ZONE = 5
 REWARD_GUARD_DIE = -10
 REWARD_COLLECTOR_DIES_NEARBY = -8
+REWARD_COLLECTOR_DIES_WHILE_ADJACENT = -15
 REWARD_BAD_DECISION = -3
 REWARD_SOLE_ESCORT = 12
 REWARD_REDUNDANT_ESCORT = -4
@@ -202,12 +203,12 @@ REWARD_GUARD_IDLE = -2
 # ============================================================
 # ENTRENAMIENTO POR CURRÍCULO
 # ============================================================
-TRAINING_EPISODES_PHASE_1 = 500   # más tiempo para converger sin hunters
-TRAINING_EPISODES_PHASE_2 = 500
-TRAINING_EPISODES_PHASE_3 = 600
-TRAINING_EPISODES_PHASE_4 = 700
+TRAINING_EPISODES_PHASE_1 = 800   # más tiempo para converger sin hunters
+TRAINING_EPISODES_PHASE_2 = 600
+TRAINING_EPISODES_PHASE_3 = 800
+TRAINING_EPISODES_PHASE_4 = 1000
 TRAINING_MAX_TICKS_PER_EPISODE = 3000
-TRAINING_EPSILON_RESET_FACTOR = 0.8  # reset más alto → más exploración al subir dificultad
+TRAINING_EPSILON_RESET_FACTOR = 0.6  # reset moderado → menos choque al subir dificultad
 QTABLE_SAVE_PATH = "data/"
 
 # ============================================================

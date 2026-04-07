@@ -22,8 +22,8 @@ QTABLE_SAVE_PATH = "data/"
 # Q-value para la acción óptima. Debe estar en el rango de las recompensas
 # reales (collect=+5, deliver=+10) para que el entrenamiento pueda ajustarlo
 # sin quedar atrapado en un prior demasiado rígido.
-Q_BEST   = 8.0
-Q_SECOND = 2.0   # segunda mejor opción (para casos con trade-off claro)
+Q_BEST   = 6.0
+Q_SECOND = 1.0   # segunda mejor opción (para casos con trade-off claro)
 
 # ---------------------------------------------------------------------------
 # COLLECTOR
