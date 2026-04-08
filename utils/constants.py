@@ -159,11 +159,11 @@ HEUR_PATROL_BASE = 20
 # ============================================================
 # Q-LEARNING
 # ============================================================
-QL_ALPHA = 0.2
+QL_ALPHA = 0.25
 QL_GAMMA = 0.9
 QL_EPSILON = 0.20
-QL_EPSILON_DECAY = 0.998
-QL_EPSILON_MIN = 0.10  # mínimo más alto para mantener exploración en fases difíciles
+QL_EPSILON_DECAY = 0.995
+QL_EPSILON_MIN = 0.04  # bajo para explotar la política aprendida
 
 # ============================================================
 # RECOMPENSAS RL – RECOLECTOR
