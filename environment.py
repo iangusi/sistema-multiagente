@@ -123,7 +123,8 @@ class Environment:
             'discovered_resources': self.discovered_resources,
             'last_seen_enemies':   self.last_seen_enemies,
             'risk_map':            self.risk_map,
-            'explored_count':      0,  # actualizado cada tick
+            'explored_count':      0,       # actualizado cada tick
+            'claimed_build_targets': set(), # celdas reservadas por recolectores con kit
         }
 
         # -----------------------------------------------------------------

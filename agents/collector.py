@@ -9,6 +9,7 @@ from utils.constants import (
     BASE_POSITION,
     MAP_WIDTH,
     MAP_HEIGHT,
+    TOWER_ATTACK_RANGE,
     HEUR_FLEE_HUNTER,
     HEUR_RETURN_FULL,
     HEUR_BUILD_HAS_KIT,
@@ -72,11 +73,12 @@ class Collector:
         self.is_alive           = True
 
         # Memoria compartida
-        self.shared_data          = shared_data
-        self.known_map            = shared_data['known_map']
-        self.discovered_resources = shared_data['discovered_resources']
-        self.last_seen_enemies    = shared_data['last_seen_enemies']
-        self.risk_map             = shared_data['risk_map']
+        self.shared_data             = shared_data
+        self.known_map               = shared_data['known_map']
+        self.discovered_resources    = shared_data['discovered_resources']
+        self.last_seen_enemies       = shared_data['last_seen_enemies']
+        self.risk_map                = shared_data['risk_map']
+        self.claimed_build_targets   = shared_data['claimed_build_targets']
 
         # Q-learning compartido
         self.q_learning = q_learning
@@ -199,46 +201,73 @@ class Collector:
 
     def _find_best_build_cell(self):
         """
-        Mejor celda para construir una torre: maximiza cobertura de riesgo
-        positivo, recursos y frontera inexplorada en radio 4.
+        Mejor celda para construir una torre.
+
+        Exclusión dura: se descartan celdas a menos de MIN_TOWER_SEP celdas
+        (Manhattan) de cualquier torre conocida o target de construcción
+        reclamado por otro recolector. Esto garantiza separación mínima entre
+        torres y evita que dos recolectores apunten al mismo lugar.
+
+        Entre las celdas válidas, puntúa:
+          + risk_coverage  : riesgo acumulado en radio TOWER_ATTACK_RANGE
+          + resource_coverage: recursos en el mismo radio
+          + frontier_coverage: celdas inexploradas en el mismo radio
+          - dist: distancia Manhattan al recolector (penalización leve)
         """
+        # Separación mínima entre torres: cero solapamiento de cobertura
+        MIN_TOWER_SEP = TOWER_ATTACK_RANGE * 2  # = 8
+
         px, py = self.position
         best_cell  = None
         best_score = float('-inf')
+
+        # Recopilar todas las posiciones que deben mantenerse alejadas
+        blocked_centers = []
+        for bx in range(MAP_WIDTH):
+            for by in range(MAP_HEIGHT):
+                if self.known_map[bx][by].get('last_known_type') == 'tower':
+                    blocked_centers.append((bx, by))
+        for ct in self.claimed_build_targets:
+            if ct != self._nav_target:   # no penalizarse a sí mismo
+                blocked_centers.append(ct)
 
         for x in range(MAP_WIDTH):
             for y in range(MAP_HEIGHT):
                 if not self.known_map[x][y].get('explored', False):
                     continue
-                ctype = self.known_map[x][y]['last_known_type']
-                if ctype not in ('empty', 'resource'):
+                if self.known_map[x][y]['last_known_type'] not in ('empty', 'resource'):
                     continue
 
-                # Riesgo positivo en radio: torres son más útiles donde hay amenaza
-                risk_coverage = 0.0
+                # Exclusión dura: demasiado cerca de torre existente o reclamada
+                too_close = any(
+                    abs(x - bx) + abs(y - by) < MIN_TOWER_SEP
+                    for bx, by in blocked_centers
+                )
+                if too_close:
+                    continue
+
+                # Cobertura en radio TOWER_ATTACK_RANGE (círculo Manhattan)
+                risk_coverage     = 0.0
                 resource_coverage = 0
                 frontier_coverage = 0
-                tower_redundancy  = 0
 
-                for ddx in range(-7, 8):
-                    for ddy in range(-7, 8):
+                for ddx in range(-TOWER_ATTACK_RANGE, TOWER_ATTACK_RANGE + 1):
+                    for ddy in range(-TOWER_ATTACK_RANGE, TOWER_ATTACK_RANGE + 1):
+                        if abs(ddx) + abs(ddy) > TOWER_ATTACK_RANGE:
+                            continue
                         nx2, ny2 = x + ddx, y + ddy
                         if not (0 <= nx2 < MAP_WIDTH and 0 <= ny2 < MAP_HEIGHT):
                             continue
-                        if self.known_map[nx2][ny2].get('last_known_type') == 'tower':
-                            tower_redundancy += 1
-                        if abs(ddx) + abs(ddy) <= 4:
-                            risk_coverage += max(0.0, self.risk_map[nx2][ny2])
-                            if self.known_map[nx2][ny2].get('last_known_type') == 'resource':
-                                resource_coverage += 1
-                            if not self.known_map[nx2][ny2].get('explored', False):
-                                frontier_coverage += 1
+                        risk_coverage += max(0.0, self.risk_map[nx2][ny2])
+                        if self.known_map[nx2][ny2].get('last_known_type') == 'resource':
+                            resource_coverage += 1
+                        if not self.known_map[nx2][ny2].get('explored', False):
+                            frontier_coverage += 1
 
                 dist  = abs(x - px) + abs(y - py)
                 score = (risk_coverage * 3.0
                          + resource_coverage * 3.0
                          + frontier_coverage * 1.0
-                         - tower_redundancy * 5.0
                          - dist * 0.5)
                 if score > best_score:
                     best_score = score
@@ -653,6 +682,8 @@ class Collector:
         self.is_alive           = False
         self.carrying_resources = 0
         self.has_build_kit      = False
+        if self._nav_action == 'BUILD_TOWER' and self._nav_target is not None:
+            self.claimed_build_targets.discard(self._nav_target)
 
     # ===================================================================
     # PATHFINDING
@@ -703,6 +734,8 @@ class Collector:
 
         # Si perdió el kit (torre construida o muerte), limpiar estado de construcción
         if not self.has_build_kit:
+            if self._nav_action == 'BUILD_TOWER' and self._nav_target is not None:
+                self.claimed_build_targets.discard(self._nav_target)
             self.build_target = None
             if self._nav_action == 'BUILD_TOWER':
                 self._nav_target = None
@@ -762,6 +795,10 @@ class Collector:
             self.current_path = self.execute_flee(visible_enemies, all_guards)
 
         elif action_changed or path_empty:
+            # Si abandonamos BUILD_TOWER, liberar el target reclamado
+            if prev_action == 'BUILD_TOWER' and self._nav_target is not None:
+                self.claimed_build_targets.discard(self._nav_target)
+
             # Recalcular A* y actualizar nav_target
             if action == 'EXPLORE':
                 # Scan completo O(N²) solo aquí, no en cada tick
@@ -789,6 +826,9 @@ class Collector:
                 self._nav_target = nav
                 self._nav_action = 'BUILD_TOWER'
                 self.current_target = nav
+                # Reclamar el target para que otros recolectores lo eviten
+                if nav is not None:
+                    self.claimed_build_targets.add(nav)
                 self.current_path = self.execute_build_tower(best_build_cell)
 
         # Si la acción no cambió y el path sigue vivo → avanzar sin recalcular nada
