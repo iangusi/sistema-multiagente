@@ -32,7 +32,7 @@ from utils.constants import (
     REWARD_FLEE_NO_HUNTER,
     REWARD_APPROACH_BASE,
 )
-from pathfinding.astar import find_path
+from pathfinding.astar_secure import find_path
 
 # Acciones disponibles del recolector
 ACTIONS = ['EXPLORE', 'GO_TO_RESOURCE', 'RETURN_TO_BASE', 'FLEE', 'BUILD_TOWER']
@@ -518,29 +518,72 @@ class Collector:
         self.current_target = BASE_POSITION
         return self._astar(BASE_POSITION)
 
-    def execute_flee(self, visible_enemies, visible_allies):
-        """Huye hacia la opción más segura: torre > guardia > base."""
+    def execute_flee(self, visible_enemies, all_guards):
+        """
+        Huye hacia la ruta MÁS SEGURA.
+        Considera TODOS los aliados disponibles (no solo visibles):
+        - Otros recolectores vivos
+        - Guardias vivos
+        - Torres conocidas (en known_map)
+        
+        Prioridad: Torre > Guardia > Recolector > Base
+        Selecciona el destino con la ruta de menor costo acumulado en risk_map.
+        """
         px, py = self.position
         options = []
 
-        for a in visible_allies:
-            if a.__class__.__name__ == 'Tower':
-                d = abs(a.position[0] - px) + abs(a.position[1] - py)
-                options.append({'pos': a.position, 'score': 30.0 - d})
-            elif a.__class__.__name__ == 'Guard':
-                d = abs(a.position[0] - px) + abs(a.position[1] - py)
-                options.append({'pos': a.position, 'score': 20.0 - d})
+        # 1. Torres conocidas (en known_map, sin importar si están visibles)
+        for x in range(MAP_WIDTH):
+            for y in range(MAP_HEIGHT):
+                if self.known_map[x][y].get('last_known_type') == 'tower':
+                    options.append({'type': 'tower', 'pos': (x, y), 'priority': 1})
 
-        # Penalizar opciones cercanas al enemigo
+        # 2. Guardias vivos (todos, no solo visibles)
+        for g in all_guards:
+            if g.is_alive:
+                options.append({'type': 'guard', 'pos': g.position, 'priority': 2})
+
+        if not options:
+            return []
+
+        # Ordenar por prioridad: torres primero
+        options.sort(key=lambda o: o['priority'])
+
+        # Evaluar el costo de A* para cada opción
+        best_option = None
+        best_path = []
+        best_cost = float('inf')
+
         for opt in options:
-            ox, oy = opt['pos']
-            for e in visible_enemies:
-                ed = abs(e.position[0] - ox) + abs(e.position[1] - oy)
-                opt['score'] -= max(0.0, (8.0 - ed) * 2.0)
+            target_pos = opt['pos']
+            # Calcular la ruta usando A* (que respeta risk_map)
+            path = self._astar(target_pos)
+            if path:
+                # Costo acumulado de la ruta según risk_map
+                route_cost = 0.0
+                for path_pos in path:
+                    px_path, py_path = path_pos
+                    route_cost += self.risk_map[px_path][py_path]
+                
+                # Penalizar si el destino está cerca del cazador visible
+                for e in visible_enemies:
+                    ed = abs(target_pos[0] - e.position[0]) + abs(target_pos[1] - e.position[1])
+                    route_cost += max(0.0, (5.0 - ed) * 2.0)
+                
+                if route_cost < best_cost:
+                    best_cost = route_cost
+                    best_option = opt
+                    best_path = path
+            else:
+                # Si A* falla, ignorar esta opción
+                continue
 
-        best = max(options, key=lambda o: o['score'])
-        self.current_target = best['pos']
-        return self._astar(best['pos'])
+        if best_option:
+            self.current_target = best_option['pos']
+            return best_path
+        else:
+            # Ninguna opción viable: quedarse quieto
+            return []
 
     def execute_build_tower(self, best_build_cell):
         """Se mueve hacia la mejor celda de construcción."""
@@ -691,7 +734,7 @@ class Collector:
         elif action == 'RETURN_TO_BASE':
             self.current_path = self.execute_return_to_base()
         elif action == 'FLEE':
-            self.current_path = self.execute_flee(visible_enemies, visible_allies)
+            self.current_path = self.execute_flee(visible_enemies, all_guards)
         elif action == 'BUILD_TOWER':
             self.current_path = self.execute_build_tower(best_build_cell)
 

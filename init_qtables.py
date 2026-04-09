@@ -135,8 +135,15 @@ def _guard_best_actions(state):
     ally_in_danger, i_am_in_danger, hunter_near, can_attack = state
     result = []
 
+    # 3. DEFENDER si aliado en peligro
+    if ally_in_danger:
+        result.append(('DEFEND', Q_BEST))
+        if hunter_near:
+            result.append(('FLEE', Q_SECOND))
+        return result
+
     # 1. ATACAR domina si puede hacerlo
-    if hunter_near:
+    if hunter_near and can_attack:
         result.append(('ATTACK', Q_BEST))
         return result
 
@@ -145,13 +152,6 @@ def _guard_best_actions(state):
         result.append(('FLEE', Q_BEST))
         if ally_in_danger:
             result.append(('DEFEND', Q_SECOND))
-        return result
-
-    # 3. DEFENDER si aliado en peligro
-    if ally_in_danger:
-        result.append(('DEFEND', Q_BEST))
-        if hunter_near:
-            result.append(('FLEE', Q_SECOND))
         return result
 
     # 4. EXPLORAR por defecto

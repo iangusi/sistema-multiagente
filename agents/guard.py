@@ -28,6 +28,7 @@ from utils.constants import (
     RISK_UNEXPLORED,
 )
 from pathfinding.astar import find_path
+from pathfinding.astar_secure import find_path as find_path_secure
 
 # Acciones disponibles del guardia
 ACTIONS = ['EXPLORE', 'ATTACK', 'DEFEND', 'FLEE']
@@ -256,18 +257,18 @@ class Guard:
 
         biases = {a: 0.0 for a in ACTIONS}
 
-        # ATACAR: domina si puede atacar (hay cazador en rango y cooldown listo)
-        if can_attack:
-            biases['ATTACK'] += HEUR_GUARD_ATTACK
-
         # HUIR: domina si está en peligro personal
         if i_am_in_danger:
             biases['FLEE'] += HEUR_GUARD_FLEE_DANGER
 
         # DEFENDER: prioridad si aliado en peligro y el guardia no está en peligro
-        if ally_in_danger and not i_am_in_danger:
+        if ally_in_danger:
             biases['DEFEND'] += HEUR_GUARD_DEFEND_ALLY
 
+        if not ally_in_danger:
+            if can_attack and hunter_near:
+                biases['ATTACK'] += HEUR_GUARD_ATTACK
+        
         # EXPLORAR: comportamiento base
         biases['EXPLORE'] += HEUR_GUARD_EXPLORE_BASE
 
@@ -494,7 +495,7 @@ class Guard:
             options.sort()
             target = options[0][1]
             self.current_target = target
-            return self._astar(target)
+            return self._astar_secure(target)
         else:
             # Sin opciones: se queda en posición actual
             return []
@@ -516,9 +517,7 @@ class Guard:
             return False
         if not hasattr(target, 'is_alive') or not target.is_alive:
             return False
-        dist = (abs(target.position[0] - self.position[0])
-                + abs(target.position[1] - self.position[1]))
-        return dist <= self.attack_range
+        return True
 
     # ===================================================================
     # RECOMPENSAS DE EVENTO
@@ -550,6 +549,15 @@ class Guard:
 
     def _astar(self, goal):
         return find_path(
+            self.position,
+            goal,
+            self._last_grid,
+            self._cost_function,
+            known_map=self.known_map,
+        )
+    
+    def _astar_secure(self, goal):
+        return find_path_secure(
             self.position,
             goal,
             self._last_grid,

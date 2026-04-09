@@ -114,9 +114,9 @@ HEUR_GOTO_RESOURCE_BASE = 100   # recurso conocido → IR_POR_RECURSO
 # HEURÍSTICAS GUARDIA
 # ============================================================
 HEUR_GUARD_ATTACK = 200         # puede atacar → ATACAR domina
-HEUR_GUARD_FLEE_DANGER = 100    # en peligro → HUIR
-HEUR_GUARD_DEFEND_ALLY = 80     # aliado en peligro → DEFENDER
-HEUR_GUARD_EXPLORE_BASE = 20    # comportamiento base → EXPLORAR
+HEUR_GUARD_FLEE_DANGER = 150    # en peligro → HUIR
+HEUR_GUARD_DEFEND_ALLY = 180     # aliado en peligro → DEFENDER
+HEUR_GUARD_EXPLORE_BASE = 120    # comportamiento base → EXPLORAR
 
 # ============================================================
 # Q-LEARNING
