@@ -21,7 +21,8 @@ def _manhattan(a, b):
     return abs(a[0] - b[0]) + abs(a[1] - b[1])
 
 
-def find_path(start, goal, grid, cost_function, known_map=None, visible_cells=None):
+def find_path(start, goal, grid, cost_function, known_map=None, visible_cells=None,
+              max_step_cost=None):
     """
     Encuentra un camino desde start hasta goal usando A*.
 
@@ -39,6 +40,18 @@ def find_path(start, goal, grid, cost_function, known_map=None, visible_cells=No
     visible_cells  : Para Cazadores. Set de (x, y) que el cazador conoce
                      (visión directa + comunicación).
                      No se puede pasar junto con known_map.
+    max_step_cost  : float | None
+                     Umbral de peligro por casilla individual.
+                     Si cost_function devuelve un valor > max_step_cost para
+                     una celda vecina, esa celda se trata como infranqueable
+                     (bloqueo duro), independientemente del costo acumulado
+                     total de la ruta.
+                     Útil para garantizar que ningún paso individual acerque
+                     al agente a una zona de peligro inmediato (p.ej. celda
+                     adyacente a un cazador).
+                     El goal nunca es bloqueado por este umbral (el agente
+                     siempre puede intentar llegar a su destino).
+                     Si None (defecto), no se aplica ningún bloqueo duro.
 
     Modos de accesibilidad (excluyentes):
       - known_map    → solo celdas exploradas que no sean obstáculo
@@ -114,6 +127,13 @@ def find_path(start, goal, grid, cost_function, known_map=None, visible_cells=No
             step_cost = cost_function(current, neighbor)
             # El costo mínimo por celda es 0.1 (nunca negativo ni cero)
             step_cost = max(0.1, step_cost)
+
+            # Bloqueo duro por peligro local: si la celda es demasiado
+            # peligrosa individualmente, se descarta como paso intermedio
+            # aunque la ruta total acumulada pareciera aceptable.
+            # El goal nunca se bloquea (el agente siempre puede intentar llegar).
+            if max_step_cost is not None and neighbor != goal and step_cost > max_step_cost:
+                continue
             tentative_g = g + step_cost
 
             if tentative_g < g_score.get(neighbor, float('inf')):

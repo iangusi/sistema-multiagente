@@ -3,7 +3,7 @@
 # ============================================================
 MAP_WIDTH = 40
 MAP_HEIGHT = 40
-BASE_POSITION = (5, 5)  # alejado de los bordes para que los cazadores tarden más en llegar
+BASE_POSITION = (20, 20)  # alejado de los bordes para que los cazadores tarden más en llegar
 
 # ============================================================
 # OBSTACULOS
@@ -29,7 +29,7 @@ BUILD_KIT_COST = 10  # cada 10 recursos depositados se genera un kit
 # ============================================================
 NUM_COLLECTORS = 5
 NUM_GUARDS = 5
-NUM_HUNTERS = 10
+NUM_HUNTERS = 15
 
 # ============================================================
 # RECOLECTOR
@@ -156,16 +156,16 @@ REWARD_APPROACH_BASE = 1          # acercarse a base cargando recursos
 # ============================================================
 REWARD_GUARD_CELL_EXPLORED = 1    # celda nueva explorada
 REWARD_GUARD_APPROACH_EXPLORE = 1 # acercarse a explorar sin aliado en peligro
-REWARD_GUARD_EXPLORE_DANGER = -5  # explorar cuando aliado corre peligro
+REWARD_GUARD_EXPLORE_DANGER = -10 # explorar cuando aliado corre peligro
 REWARD_KILL_HUNTER = 8            # eliminar cazador
 REWARD_KILL_HUNTER_DEFEND = 8     # bonus por matar cazador mientras aliado en peligro
-REWARD_GUARD_HUNTER_NO_DANGER = 1 # cazador cerca sin peligro propio
+REWARD_GUARD_HUNTER_NO_DANGER = 2 # cazador cerca sin peligro propio
 REWARD_GUARD_APPROACH_HUNTER = 5  # acercarse a cazador pudiendo atacar
 REWARD_GUARD_HUNTER_IN_DANGER = -2 # cazador cerca con peligro propio
-REWARD_GUARD_FLEE_DANGER = 5      # huir estando en peligro
-REWARD_GUARD_FLEE_NO_ATTACK = 5   # huir sin poder atacar
+REWARD_GUARD_FLEE_DANGER = 10      # huir estando en peligro
+REWARD_GUARD_FLEE_NO_ATTACK = 6   # huir sin poder atacar
 REWARD_GUARD_CANT_ATTACK = -3     # cazador cerca sin poder atacar
-REWARD_GUARD_APPROACH_ALLY = 8    # acercarse a aliado en peligro
+REWARD_GUARD_APPROACH_ALLY = 20    # acercarse a aliado en peligro
 REWARD_GUARD_DIE = -10            # muerte del guardia
 
 # ============================================================
@@ -202,11 +202,16 @@ RISK_MEMORY_TICKS      = 4   # ticks antes de ignorar avistamiento de cazador
 # Decaimiento por tick: 0.5^4 ≈ 0.06 → la celda tiende a 0 en ~4 ticks sin fuente
 RISK_DECAY             = 0.5
 RISK_UNEXPLORED        = 0.0  # celdas desconocidas: riesgo neutro
+# Umbral de bloqueo duro por casilla individual en A*.
+# cost = 1.0 + risk_map → cazador dist 0: 3.0, dist 1: 2.6, dist 2: 2.2
+# Un valor de 2.5 bloquea la casilla del cazador y las adyacentes (dist ≤ 1)
+# sin bloquear celdas a distancia ≥ 2, donde el riesgo baja a 2.2 o menos.
+RISK_PATH_STEP_LIMIT   = 2.5
 
 # ============================================================
 # USER INPUT
 # ============================================================
-USER_INFLUENCE_WEIGHT = 0.4  # peso del click del usuario sobre cazadores
+USER_INFLUENCE_WEIGHT = 0.8  # peso del click del usuario sobre cazadores
 
 # ============================================================
 # SIMULACIÓN

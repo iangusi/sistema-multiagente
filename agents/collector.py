@@ -33,6 +33,7 @@ from utils.constants import (
     REWARD_BAD_ACTION_HUNTER,
     REWARD_FLEE_NO_HUNTER,
     REWARD_APPROACH_BASE,
+    RISK_PATH_STEP_LIMIT,
 )
 from pathfinding.astar_secure import find_path
 
@@ -696,6 +697,7 @@ class Collector:
             self._last_grid,
             self._cost_function,
             known_map=self.known_map,
+            max_step_cost=RISK_PATH_STEP_LIMIT,
         )
 
     def _cost_function(self, _, neighbor_pos):
