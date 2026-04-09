@@ -29,7 +29,7 @@ BUILD_KIT_COST = 10  # cada 10 recursos depositados se genera un kit
 # ============================================================
 NUM_COLLECTORS = 5
 NUM_GUARDS = 5
-NUM_HUNTERS = 15
+NUM_HUNTERS = 10
 
 # ============================================================
 # RECOLECTOR

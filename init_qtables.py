@@ -136,7 +136,7 @@ def _guard_best_actions(state):
     result = []
 
     # 1. ATACAR domina si puede hacerlo
-    if can_attack:
+    if hunter_near:
         result.append(('ATTACK', Q_BEST))
         return result
 
@@ -164,11 +164,6 @@ def build_guard_qtable():
 
     valid = 0
     for combo in itertools.product([0, 1], [0, 1], [0, 1], [0, 1]):
-        ally_in_danger, i_am_in_danger, hunter_near, can_attack = combo
-
-        # can_attack=1 implica hunter_near=1
-        if can_attack == 1 and hunter_near == 0:
-            continue
 
         state = combo
         for action, q_val in _guard_best_actions(state):

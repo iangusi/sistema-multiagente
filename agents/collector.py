@@ -531,9 +531,6 @@ class Collector:
                 d = abs(a.position[0] - px) + abs(a.position[1] - py)
                 options.append({'pos': a.position, 'score': 20.0 - d})
 
-        d_base = abs(BASE_POSITION[0] - px) + abs(BASE_POSITION[1] - py)
-        options.append({'pos': BASE_POSITION, 'score': 10.0 - d_base})
-
         # Penalizar opciones cercanas al enemigo
         for opt in options:
             ox, oy = opt['pos']

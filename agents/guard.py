@@ -176,14 +176,16 @@ class Guard:
     def _compute_danger(self, agent, hunter_positions, all_guards, is_collector):
         """
         Calcula el peligro de un agente aliado.
-          Recolector: 0 + 3×cazadores_cerca - 2×guardias_cerca
-          Guardia:   −1 + 1×cazadores_cerca
+        Busca cazadores en radio 4 alrededor de la POSICIÓN DEL ALIADO.
+        Recolector: 0 + 3×(cazadores_a_≤4_celdas) - 2×(guardias_a_≤4_celdas)
+        Guardia:   −1 + 1×(cazadores_a_≤4_celdas)
         """
         ax, ay = agent.position
 
+        # Contar cazadores EN RANGO 4 DE LA POSICIÓN DEL ALIADO
         cazadores_cerca = sum(
-            1 for hp in hunter_positions
-            if abs(hp[0] - ax) + abs(hp[1] - ay) <= _DANGER_RANGE
+            1 for hp in self.last_seen_enemies  # Usar last_seen_enemies, no hunter_positions param
+            if abs(hp['position'][0] - ax) + abs(hp['position'][1] - ay) <= _DANGER_RANGE
         )
 
         if is_collector:
@@ -196,7 +198,7 @@ class Guard:
         else:
             # Guardia
             return -1 + 1 * cazadores_cerca
-
+    
     def _compute_all_dangers(self, all_collectors, all_guards, hunter_positions):
         """
         Retorna dict {agent: danger} para todos los aliados vivos.
@@ -238,13 +240,7 @@ class Guard:
         i_am_in_danger = int(my_danger > 0)
         hunter_near    = 1 if visible_enemies else 0
 
-        can_attack = int(
-            self.current_cooldown == 0
-            and any(
-                abs(e.position[0] - px) + abs(e.position[1] - py) <= self.attack_range
-                for e in visible_enemies
-            )
-        )
+        can_attack = int(self.current_cooldown == 0)
 
         return (ally_in_danger, i_am_in_danger, hunter_near, can_attack)
 
@@ -323,7 +319,27 @@ class Guard:
 
         # Ejecutar acción
         if action == 'ATTACK':
-            target = self._closest_enemy(visible_enemies)
+            # Prioridad: 1) visible_enemies (en vision_range)
+            #           2) Si no visible, buscar enemy registrado por aliados (last_seen_enemies)
+            target = None
+            if visible_enemies:
+                target = self._closest_enemy(visible_enemies)
+            else:
+                # Buscar cazador más recientemente visto (aunque no esté en vision_range ahora)
+                if self.last_seen_enemies:
+                    most_recent = max(
+                        self.last_seen_enemies,
+                        key=lambda e: e['tick']
+                    )
+                    target_pos = most_recent['position']
+                    self.current_path = self._astar(target_pos)
+                    self.current_target = target_pos
+                    if self.current_path:
+                        self.next_position = self.current_path.pop(0)
+                    else:
+                        self.next_position = self.position
+                    return self.next_position
+            
             if target:
                 self.current_path = self._astar(target.position)
             else:
@@ -458,7 +474,7 @@ class Guard:
     def execute_flee(self):
         """
         Busca la ruta más segura hacia un guardia o torre conocida.
-        Fallback: base.
+        Si no hay opciones, se queda en posición actual.
         """
         px, py = self.position
         options = []
@@ -477,11 +493,11 @@ class Guard:
         if options:
             options.sort()
             target = options[0][1]
+            self.current_target = target
+            return self._astar(target)
         else:
-            target = BASE_POSITION
-
-        self.current_target = target
-        return self._astar(target)
+            # Sin opciones: se queda en posición actual
+            return []
 
     def execute_attack(self, target):
         """Verifica ataque (el hit real lo resuelve el environment)."""
@@ -569,19 +585,19 @@ class Guard:
         Retorna el aliado (no yo mismo) con mayor nivel de peligro > 0.
         Retorna None si ninguno está en peligro.
         """
-        hunter_positions = self._hunter_positions_recent(current_tick)
+        # Ya no necesita hunter_positions porque _compute_danger usa self.last_seen_enemies
         best_agent  = None
         best_danger = 0  # solo nos interesan los que tienen peligro > 0
 
         for c in self._all_collectors:
-            d = self._compute_danger(c, hunter_positions, self._all_guards, True)
+            d = self._compute_danger(c, None, self._all_guards, True)
             if d > best_danger:
                 best_danger = d
                 best_agent  = c
 
         for g in self._all_guards:
             if g is not self:
-                d = self._compute_danger(g, hunter_positions, self._all_guards, False)
+                d = self._compute_danger(g, None, self._all_guards, False)
                 if d > best_danger:
                     best_danger = d
                     best_agent  = g
