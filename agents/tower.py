@@ -5,7 +5,6 @@ from utils.constants import (
     TOWER_ATTACK_RANGE,
     TOWER_ATTACK_COOLDOWN,
     TOWER_DAMAGE,
-    RISK_TOWER_REDUCTION,
 )
 
 
@@ -92,9 +91,8 @@ class Tower:
                             'tick':     current_tick,
                         })
 
-        # 4. Actualizar risk_map: reducir riesgo en zona de la torre para Equipo A
-        for (cx, cy) in visible:
-            risk_map[cx][cy] = max(0.0, risk_map[cx][cy] - RISK_TOWER_REDUCTION)
+        # 4. (La reducción de riesgo de torres se gestiona en _update_risk_map()
+        #     del environment, que reconstruye el mapa completo cada tick.)
 
         # 5. Atacar cazador más cercano en attack_range si cooldown == 0
         if self.current_cooldown == 0:

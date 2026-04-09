@@ -97,64 +97,26 @@ PHASE_EARLY_THRESHOLD = 0.30    # < 30% explorado = EARLY
 PHASE_MID_THRESHOLD = 0.65      # 30-65% = MID, > 65% = LATE
 
 # ============================================================
+# CONTROL DE TORRES (usado por environment._check_build_kits)
+# ============================================================
+MAX_TOWERS_PER_EXPLORATION = 0.08  # max_torres = celdas_exploradas × factor
+
+# ============================================================
 # HEURÍSTICAS RECOLECTOR
 # ============================================================
-HEUR_FLEE_ENEMY_NEAR = 200
-HEUR_FLEE_ENEMY_NO_GUARD = 120
+HEUR_FLEE_HUNTER = 200          # cazador visible → HUIR domina
+HEUR_RETURN_FULL = 130          # inventario lleno → IR_A_BASE
+HEUR_BUILD_HAS_KIT = 150        # tiene kit → CONSTRUIR
+HEUR_GOTO_RESOURCE_BASE = 100   # recurso conocido → IR_POR_RECURSO
 
-HEUR_RETURN_FULL = 125
-HEUR_RETURN_PARTIAL_FACTOR = 40
-HEUR_RETURN_EMPTY_PENALTY = -80
-
-HEUR_GOTO_RESOURCE_BASE = 60
-HEUR_GOTO_RESOURCE_EMPTY_BONUS = 40
-HEUR_GOTO_RESOURCE_NO_GUARD = 20   # bonus: animar recolección en zona peligrosa sin guardia
-HEUR_GOTO_RESOURCE_MID_BONUS = 30
-
-HEUR_EXPLORE_LOW_COVERAGE = 50
-HEUR_EXPLORE_NO_RESOURCES_KNOWN = 40
-HEUR_EXPLORE_NO_GUARD_PENALTY = -60
-HEUR_EXPLORE_EARLY_BONUS = 40
-
-HEUR_BUILD_HAS_KIT = 100
-HEUR_BUILD_TOO_MANY_TOWERS = -80
-HEUR_BUILD_LAST_COLLECTOR = -150
-HEUR_BUILD_LOW_EXPLORATION = 40    # bonus: construir defensas en EARLY es crítico
-
-# Anti-estancamiento
-STAGNATION_THRESHOLD = 12
-STAGNATION_PENALTY_RATE = 8
-MAX_TOWERS_PER_EXPLORATION = 0.08
-
-# Protocolo early game
-EARLY_GAME_SAFE_RADIUS = 8
-EARLY_GAME_FLEE_BONUS = 80
 
 # ============================================================
 # HEURÍSTICAS GUARDIA
 # ============================================================
-HEUR_ESCORT_VULNERABLE = 100
-HEUR_ESCORT_HAS_KIT = 130
-HEUR_ESCORT_REDUNDANT = -20   # reducido: no dispersar guardias tan agresivamente
-HEUR_ESCORT_COLLECTOR_AT_BASE = -40
-
-HEUR_ATTACK_IN_RANGE = 100
-HEUR_ATTACK_ADVANTAGE = 40
-HEUR_ATTACK_DISADVANTAGE = -60
-
-HEUR_INTERCEPT_ENEMY_NEAR = 80
-HEUR_INTERCEPT_COLLECTOR_DANGER = 50
-
-HEUR_SCOUT_LOW_EXPLORATION = 60
-HEUR_SCOUT_EARLY_BONUS = 40
-HEUR_SCOUT_NO_ESCORT_NEEDED = 30
-
-HEUR_DEFEND_HAS_TOWERS = 50
-HEUR_DEFEND_HIGH_RISK = 40
-
-HEUR_INVESTIGATE_RECENT = 60
-
-HEUR_PATROL_BASE = 20
+HEUR_GUARD_ATTACK = 200         # puede atacar → ATACAR domina
+HEUR_GUARD_FLEE_DANGER = 100    # en peligro → HUIR
+HEUR_GUARD_DEFEND_ALLY = 80     # aliado en peligro → DEFENDER
+HEUR_GUARD_EXPLORE_BASE = 20    # comportamiento base → EXPLORAR
 
 # ============================================================
 # Q-LEARNING
@@ -168,37 +130,43 @@ QL_EPSILON_MIN = 0.04  # bajo para explotar la política aprendida
 # ============================================================
 # RECOMPENSAS RL – RECOLECTOR
 # ============================================================
-REWARD_DELIVER_RESOURCES = 10
-REWARD_COLLECT = 5
-REWARD_EXPLORE = 3
-REWARD_BUILD_TOWER = 8
-REWARD_DANGER_ZONE = -2
-REWARD_LOSE_RESOURCES = -5
-REWARD_COLLECTOR_DIE = -10
-REWARD_IDLE = -3
-REWARD_RETURN_EMPTY = -4
-REWARD_APPROACH_RESOURCE = 1
-REWARD_STAGNATION = -5
-REWARD_EXPLORE_WITH_ESCORT = 5
+REWARD_APPROACH_EXPLORE = 1       # acercarse a celda de exploración
+REWARD_CELL_EXPLORED = 1          # celda nueva explorada
+REWARD_APPROACH_RESOURCE = 1      # acercarse al recurso más cercano
+REWARD_COLLECT = 5                # recolectar recurso
+REWARD_GOING_TO_BASE_RES = 1      # ir a base cargando recursos
+REWARD_DELIVER_RESOURCES = 5      # depositar recursos en base
+REWARD_APPROACH_BUILD = 2         # acercarse a celda de construcción
+REWARD_BUILD_NO_KIT = -1          # acción CONSTRUIR sin tener kit
+REWARD_BUILD_TOWER = 5            # torre creada exitosamente
+REWARD_GUARD_NEARBY = 1           # guardia aliado visible
+REWARD_TOWER_NEARBY = 1           # torre aliada visible
+REWARD_FLEE_HUNTER = 5            # huir con cazador cerca
+REWARD_HUNTER_NEAR = -3           # cazador visible (penaliza estar en peligro)
+REWARD_COLLECTOR_DIE = -10        # muerte del recolector
+REWARD_BASE_NO_RES = -1           # ir a base sin recursos
+REWARD_RESOURCE_FULL = -1         # ir a recurso estando lleno
+REWARD_EXPLORE_WITH_KIT = -1      # explorar teniendo kit de construcción
+REWARD_BAD_ACTION_HUNTER = -1     # explorar/recurso/base con cazador cerca
+REWARD_FLEE_NO_HUNTER = -1        # huir sin cazador cerca
+REWARD_APPROACH_BASE = 1          # acercarse a base cargando recursos
 
 # ============================================================
 # RECOMPENSAS RL – GUARDIA
 # ============================================================
-REWARD_KILL_HUNTER = 15
-REWARD_PROTECT_COLLECTOR = 10
-REWARD_INTERCEPT = 6
-REWARD_DEFEND_ZONE = 5
-REWARD_GUARD_DIE = -10
-REWARD_COLLECTOR_DIES_NEARBY = -8
-REWARD_COLLECTOR_DIES_WHILE_ADJACENT = -15
-REWARD_BAD_DECISION = -3
-REWARD_SOLE_ESCORT = 12
-REWARD_REDUNDANT_ESCORT = -4
-REWARD_COLLECTOR_SAFE_NO_ESCORT = -1
-REWARD_SCOUT_NEW_CELLS = 4
-REWARD_SCOUT_FIND_RESOURCE = 7
-REWARD_ESCORT_COLLECTOR_COLLECTS = 3
-REWARD_GUARD_IDLE = -2
+REWARD_GUARD_CELL_EXPLORED = 1    # celda nueva explorada
+REWARD_GUARD_APPROACH_EXPLORE = 1 # acercarse a explorar sin aliado en peligro
+REWARD_GUARD_EXPLORE_DANGER = -1  # explorar cuando aliado corre peligro
+REWARD_KILL_HUNTER = 3            # eliminar cazador
+REWARD_KILL_HUNTER_DEFEND = 2    # bonus por matar cazador mientras aliado en peligro
+REWARD_GUARD_HUNTER_NO_DANGER = 1 # cazador cerca sin peligro propio
+REWARD_GUARD_APPROACH_HUNTER = 1  # acercarse a cazador pudiendo atacar
+REWARD_GUARD_HUNTER_IN_DANGER = -1 # cazador cerca con peligro propio
+REWARD_GUARD_FLEE_DANGER = 2      # huir estando en peligro
+REWARD_GUARD_FLEE_NO_ATTACK = 1   # huir sin poder atacar
+REWARD_GUARD_CANT_ATTACK = -2     # cazador cerca sin poder atacar
+REWARD_GUARD_APPROACH_ALLY = 1    # acercarse a aliado en peligro
+REWARD_GUARD_DIE = -10            # muerte del guardia
 
 # ============================================================
 # ENTRENAMIENTO POR CURRÍCULO
@@ -214,11 +182,16 @@ QTABLE_SAVE_PATH = "data/"
 # ============================================================
 # MAPA DE RIESGO
 # ============================================================
-RISK_DECAY = 0.98         # por tick
-RISK_DIFFUSION = 0.1      # factor de difusión a vecinos
-RISK_ENEMY_WEIGHT = 1.0
-RISK_TOWER_REDUCTION = 0.5
-RISK_UNEXPLORED = 0.3     # riesgo base de lo desconocido
+# Valores base en la casilla del agente (se propagan en radio RISK_PROPAGATION_RANGE)
+RISK_GUARD     = -1.0   # guardia reduce riesgo
+RISK_TOWER     = -3.0   # torre reduce mucho el riesgo
+RISK_COLLECTOR =  0.5   # recolector sube ligeramente el riesgo (atrae cazadores)
+RISK_HUNTER    =  2.0   # cazador sube mucho el riesgo
+RISK_PROPAGATION_RANGE = 4   # celdas de propagación alrededor
+RISK_MEMORY_TICKS      = 4   # ticks antes de ignorar avistamiento de cazador
+# Decaimiento por tick: 0.5^4 ≈ 0.06 → la celda tiende a 0 en ~4 ticks sin fuente
+RISK_DECAY             = 0.5
+RISK_UNEXPLORED        = 0.0  # celdas desconocidas: riesgo neutro
 
 # ============================================================
 # USER INPUT

@@ -1,6 +1,6 @@
 """
-Tests de verificación post-fixes.
-Cubre: stagnation fix, pending_reward, balance de heurísticas, integración headless.
+Tests de verificación del sistema multi-agente.
+Valida imports, constantes, atributos de agentes, heurísticas e integración headless.
 """
 import sys
 import traceback
@@ -33,10 +33,15 @@ section("1. IMPORTS")
 
 try:
     from utils.constants import (
-        HEUR_RETURN_FULL, HEUR_GOTO_RESOURCE_MID_BONUS,
-        STAGNATION_THRESHOLD, BASE_POSITION,
+        HEUR_FLEE_HUNTER, HEUR_RETURN_FULL, HEUR_BUILD_HAS_KIT,
+        HEUR_GOTO_RESOURCE_BASE,
+        HEUR_GUARD_ATTACK, HEUR_GUARD_FLEE_DANGER,
+        HEUR_GUARD_DEFEND_ALLY, HEUR_GUARD_EXPLORE_BASE,
         NUM_COLLECTORS, NUM_GUARDS,
+        BASE_POSITION,
         TRAINING_MAX_TICKS_PER_EPISODE,
+        REWARD_COLLECT, REWARD_DELIVER_RESOURCES,
+        REWARD_KILL_HUNTER,
     )
     ok("utils.constants importado")
 except Exception as e:
@@ -67,48 +72,47 @@ except Exception as e:
     fail("agents.guard", str(e)); sys.exit(1)
 
 # ============================================================
-# 2. CONSTANTES — BALANCE DE HEURÍSTICAS
+# 2. CONSTANTES — JERARQUÍA DE HEURÍSTICAS
 # ============================================================
-section("2. BALANCE DE HEURÍSTICAS (constants)")
+section("2. JERARQUÍA DE HEURÍSTICAS (constants)")
 
-from utils.constants import (
-    HEUR_GOTO_RESOURCE_BASE, HEUR_GOTO_RESOURCE_EMPTY_BONUS,
-    HEUR_RETURN_FULL, HEUR_GOTO_RESOURCE_MID_BONUS,
-    HEUR_FLEE_ENEMY_NEAR, HEUR_FLEE_ENEMY_NO_GUARD,
-    HEUR_SCOUT_LOW_EXPLORATION, HEUR_SCOUT_EARLY_BONUS, HEUR_SCOUT_NO_ESCORT_NEEDED,
-    HEUR_INTERCEPT_ENEMY_NEAR,
-)
-
-# RETURN_TO_BASE cuando lleno debe ganar a GO_TO_RESOURCE en cualquier fase
-max_goto_mid = HEUR_GOTO_RESOURCE_BASE + HEUR_GOTO_RESOURCE_MID_BONUS  # carrying → no empty bonus
-if HEUR_RETURN_FULL > max_goto_mid:
-    ok(f"RETURN_FULL ({HEUR_RETURN_FULL}) > GO_TO_RESOURCE+MID cuando carga ({max_goto_mid})")
+# FLEE debe dominar sobre RETURN_TO_BASE y GO_TO_RESOURCE
+if HEUR_FLEE_HUNTER > HEUR_RETURN_FULL:
+    ok(f"FLEE ({HEUR_FLEE_HUNTER}) > RETURN_FULL ({HEUR_RETURN_FULL})")
 else:
-    fail("RETURN_FULL debería superar GO_TO_RESOURCE+MID cuando lleno",
-         f"RETURN_FULL={HEUR_RETURN_FULL}, GO_RESOURCE+MID={max_goto_mid}")
+    fail("FLEE debe superar RETURN_FULL",
+         f"FLEE={HEUR_FLEE_HUNTER}, RETURN_FULL={HEUR_RETURN_FULL}")
 
-# FLEE debe dominar sobre cualquier otra acción
-max_non_flee = HEUR_RETURN_FULL  # el más alto posible de las otras
-flee_min = HEUR_FLEE_ENEMY_NEAR
-if flee_min > max_non_flee:
-    ok(f"FLEE_BASE ({flee_min}) > máximo no-FLEE ({max_non_flee})")
+if HEUR_FLEE_HUNTER > HEUR_GOTO_RESOURCE_BASE:
+    ok(f"FLEE ({HEUR_FLEE_HUNTER}) > GO_TO_RESOURCE ({HEUR_GOTO_RESOURCE_BASE})")
 else:
-    fail("FLEE debería dominar cualquier otra acción",
-         f"FLEE_BASE={flee_min}, max_no_flee={max_non_flee}")
+    fail("FLEE debe superar GO_TO_RESOURCE",
+         f"FLEE={HEUR_FLEE_HUNTER}, GO_RESOURCE={HEUR_GOTO_RESOURCE_BASE}")
 
-# SCOUT con enemy_near debe perder ante INTERCEPT
-scout_with_enemy = HEUR_SCOUT_LOW_EXPLORATION + HEUR_SCOUT_EARLY_BONUS + HEUR_SCOUT_NO_ESCORT_NEEDED - 90
-intercept_base = HEUR_INTERCEPT_ENEMY_NEAR
-if scout_with_enemy < intercept_base:
-    ok(f"SCOUT con enemy_near ({scout_with_enemy}) < INTERCEPT ({intercept_base})")
+# BUILD_HAS_KIT debe superar RETURN_FULL (kit = oportunidad táctica)
+if HEUR_BUILD_HAS_KIT > HEUR_RETURN_FULL:
+    ok(f"BUILD_HAS_KIT ({HEUR_BUILD_HAS_KIT}) > RETURN_FULL ({HEUR_RETURN_FULL})")
 else:
-    fail("SCOUT con enemy_near debería perder ante INTERCEPT",
-         f"SCOUT={scout_with_enemy}, INTERCEPT={intercept_base}")
+    fail("BUILD_HAS_KIT debe superar RETURN_FULL",
+         f"BUILD_HAS_KIT={HEUR_BUILD_HAS_KIT}, RETURN_FULL={HEUR_RETURN_FULL}")
+
+# Guardia: ATTACK domina sobre FLEE
+if HEUR_GUARD_ATTACK > HEUR_GUARD_FLEE_DANGER:
+    ok(f"Guard ATTACK ({HEUR_GUARD_ATTACK}) > FLEE ({HEUR_GUARD_FLEE_DANGER})")
+else:
+    fail("Guard ATTACK debe superar FLEE",
+         f"ATTACK={HEUR_GUARD_ATTACK}, FLEE={HEUR_GUARD_FLEE_DANGER}")
+
+# Guardia: DEFEND_ALLY > EXPLORE (base)
+if HEUR_GUARD_DEFEND_ALLY > HEUR_GUARD_EXPLORE_BASE:
+    ok(f"Guard DEFEND ({HEUR_GUARD_DEFEND_ALLY}) > EXPLORE ({HEUR_GUARD_EXPLORE_BASE})")
+else:
+    fail("Guard DEFEND debe superar EXPLORE",
+         f"DEFEND={HEUR_GUARD_DEFEND_ALLY}, EXPLORE={HEUR_GUARD_EXPLORE_BASE}")
 
 # ============================================================
-# 3. COLLECTOR — _pending_reward Y ATRIBUTOS
+# HELPER: crea entorno headless con QLearning propio
 # ============================================================
-section("3. COLLECTOR — atributos y pending_reward")
 
 def make_env_headless(hunters=0):
     collector_ql = QLearning(
@@ -116,371 +120,384 @@ def make_env_headless(hunters=0):
         alpha=0.2, gamma=0.9, epsilon=0.5, epsilon_decay=0.999, epsilon_min=0.08,
     )
     guard_ql = QLearning(
-        actions=['PATROL', 'ESCORT', 'ATTACK', 'INTERCEPT', 'DEFEND_ZONE', 'INVESTIGATE', 'SCOUT'],
+        actions=['EXPLORE', 'ATTACK', 'DEFEND', 'FLEE'],
         alpha=0.2, gamma=0.9, epsilon=0.5, epsilon_decay=0.999, epsilon_min=0.08,
     )
-    env = Environment(num_hunters_override=hunters, collector_ql=collector_ql,
-                      guard_ql=guard_ql, headless=True)
+    env = Environment(
+        num_hunters_override=hunters,
+        collector_ql=collector_ql,
+        guard_ql=guard_ql,
+        headless=True,
+    )
     return env, collector_ql, guard_ql
+
+# ============================================================
+# 3. COLLECTOR — atributos básicos y receive_reward
+# ============================================================
+section("3. COLLECTOR — atributos y pending_reward")
 
 try:
     env, cql, gql = make_env_headless(0)
     c = env.collectors[0]
 
-    # Atributos nuevos
     if hasattr(c, '_pending_reward'):
         ok("Collector tiene _pending_reward")
     else:
         fail("Collector NO tiene _pending_reward")
 
-    if hasattr(c, '_prev_dist_to_base'):
-        ok("Collector tiene _prev_dist_to_base")
+    if hasattr(c, 'is_alive') and c.is_alive:
+        ok("Collector nace vivo")
     else:
-        fail("Collector NO tiene _prev_dist_to_base")
+        fail("Collector no tiene is_alive o nace muerto")
 
-    # receive_reward acumula y no crashea
+    if hasattr(c, 'carrying_resources') and c.carrying_resources == 0:
+        ok("Collector inicia sin recursos")
+    else:
+        fail("Collector no tiene carrying_resources o inicia con recursos")
+
+    # receive_reward acumula sin crashear
     c.receive_reward('collect')
     c.receive_reward('deliver_resources')
-    from utils.constants import REWARD_COLLECT, REWARD_DELIVER_RESOURCES
     expected = REWARD_COLLECT + REWARD_DELIVER_RESOURCES
     if abs(c._pending_reward - expected) < 0.01:
-        ok(f"receive_reward acumula correctamente ({c._pending_reward} = {expected})")
+        ok(f"receive_reward acumula correctamente ({c._pending_reward} == {expected})")
     else:
         fail("receive_reward no acumula bien",
              f"esperado={expected}, obtenido={c._pending_reward}")
 
-except Exception as e:
-    fail("Collector init/atributos", traceback.format_exc())
-
-# ============================================================
-# 4. COLLECTOR — STAGNATION FIX (acercarse a base = progreso)
-# ============================================================
-section("4. COLLECTOR — stagnation fix: regreso a base")
-
-try:
-    env2, cql2, _ = make_env_headless(0)
-    c2 = env2.collectors[0]
-
-    # Simular recolector con recursos cargados que se acerca a la base
-    c2.carrying_resources = 10
-    bx, by = BASE_POSITION
-    # Colocar lejos de la base
-    c2.position = (bx + 15, by + 15)
-    c2._prev_dist_to_base = 30
-    c2._prev_resources_carried = 10
-    c2._prev_explored_count = 0
-    c2.ticks_since_progress = 5
-
-    # Simular un paso acercándose
-    c2.position = (bx + 14, by + 15)  # 1 paso más cerca
-    c2._update_progress_tracking('RETURN_TO_BASE')
-
-    if c2.ticks_since_progress == 0:
-        ok("Acercarse a la base mientras carga resetea ticks_since_progress")
+    # Evento desconocido devuelve 0
+    before = c._pending_reward
+    c.receive_reward('evento_inexistente')
+    if abs(c._pending_reward - before) < 0.01:
+        ok("Evento desconocido en receive_reward no modifica pending_reward")
     else:
-        fail("Acercarse a la base NO se detecta como progreso",
-             f"ticks_since_progress={c2.ticks_since_progress} (esperado 0)")
-
-    # Alejarse de la base sin cargar NO debe contar como progreso
-    c2.carrying_resources = 0
-    c2._prev_dist_to_base = 13
-    c2.ticks_since_progress = 5
-    c2.position = (bx + 14, by + 16)  # alejarse
-    c2._prev_resources_carried = 0
-    c2._update_progress_tracking('EXPLORE')
-
-    if c2.ticks_since_progress == 6:
-        ok("Alejarse sin carga NO cuenta como progreso (ticks_since_progress sube)")
-    else:
-        fail("Alejarse sin carga incorrectamente contó como progreso",
-             f"ticks_since_progress={c2.ticks_since_progress} (esperado 6)")
+        fail("Evento desconocido modificó pending_reward incorrectamente")
 
 except Exception as e:
-    fail("Stagnation fix", traceback.format_exc())
+    fail("Collector atributos/receive_reward", traceback.format_exc())
 
 # ============================================================
-# 5. COLLECTOR — HEURÍSTICAS: acción correcta por estado
+# 4. GUARD — atributos básicos y receive_reward
 # ============================================================
-section("5. COLLECTOR — selección de acción por heurísticas (epsilon=0)")
+section("4. GUARD — atributos y pending_reward")
 
 try:
-    env3, cql3, _ = make_env_headless(0)
-    c3 = env3.collectors[0]
-    c3.q_learning.epsilon = 0.0  # sin aleatoriedad
-
-    from utils.constants import (
-        COLLECTOR_CARRY_CAPACITY,
-        HEUR_GOTO_RESOURCE_BASE, HEUR_GOTO_RESOURCE_EMPTY_BONUS,
-    )
-
-    # Estado: lleno + recursos conocidos + fase MID → debe elegir RETURN_TO_BASE
-    state_full = (0, 1, 1, 0, 0, 0, 0, 1, 0, 1)
-    biases_full = c3.calculate_heuristic_biases(
-        state_full, "MID",
-        {'carrying_resources': 10, 'carrying_capacity': 10,
-         'explored_percent': 0.5, 'tower_count': 0,
-         'num_alive_collectors': 5, 'current_action_streak': 0,
-         'ticks_since_progress': 0, 'guard_near': 0}
-    )
-    best_full = max(biases_full, key=lambda a: biases_full[a])
-    if best_full == 'RETURN_TO_BASE':
-        ok(f"Lleno+MID+recursos -> RETURN_TO_BASE (bias={biases_full['RETURN_TO_BASE']})")
-    else:
-        fail("Lleno+MID no elige RETURN_TO_BASE",
-             f"eligio={best_full}, biases={biases_full}")
-
-    # Estado: lleno + streak=30 + ticks_since_progress=0 (regreso productivo)
-    # El streak NO debe romper RETURN_TO_BASE si hay progreso real
-    biases_streak = c3.calculate_heuristic_biases(
-        state_full, "MID",
-        {'carrying_resources': 10, 'carrying_capacity': 10,
-         'explored_percent': 0.5, 'tower_count': 0,
-         'num_alive_collectors': 5, 'current_action_streak': 30,
-         'ticks_since_progress': 0, 'guard_near': 0}
-    )
-    best_streak = max(biases_streak, key=lambda a: biases_streak[a])
-    if best_streak == 'RETURN_TO_BASE':
-        ok(f"Streak=30 + progreso=0 -> RETURN_TO_BASE mantiene prioridad (bias={biases_streak['RETURN_TO_BASE']})")
-    else:
-        fail("Streak alto con progreso real rompe RETURN_TO_BASE (bug residual de stagnation)",
-             f"eligio={best_streak}, RETURN={biases_streak['RETURN_TO_BASE']}, GO_RES={biases_streak['GO_TO_RESOURCE']}")
-
-    # Estado: vacio + recursos conocidos + fase MID -> debe elegir GO_TO_RESOURCE
-    state_empty = (0, 0, 0, 0, 0, 0, 0, 1, 0, 1)
-    biases_empty = c3.calculate_heuristic_biases(
-        state_empty, "MID",
-        {'carrying_resources': 0, 'carrying_capacity': 10,
-         'explored_percent': 0.5, 'tower_count': 0,
-         'num_alive_collectors': 5, 'current_action_streak': 0,
-         'ticks_since_progress': 0, 'guard_near': 0}
-    )
-    best_empty = max(biases_empty, key=lambda a: biases_empty[a])
-    if best_empty == 'GO_TO_RESOURCE':
-        ok(f"Vacio+MID+recursos -> GO_TO_RESOURCE (bias={biases_empty['GO_TO_RESOURCE']})")
-    else:
-        fail("Vacio+MID no elige GO_TO_RESOURCE",
-             f"eligio={best_empty}, biases={biases_empty}")
-
-    # Estado: enemy_near -> debe elegir FLEE
-    state_danger = (1, 0, 0, 0, 0, 0, 0, 1, 0, 0)  # enemy_near=1
-    biases_danger = c3.calculate_heuristic_biases(
-        state_danger, "EARLY",
-        {'carrying_resources': 5, 'carrying_capacity': 10,
-         'explored_percent': 0.1, 'tower_count': 0,
-         'num_alive_collectors': 5, 'current_action_streak': 0,
-         'ticks_since_progress': 0, 'guard_near': 0}
-    )
-    best_danger = max(biases_danger, key=lambda a: biases_danger[a])
-    if best_danger == 'FLEE':
-        ok(f"Enemy near -> FLEE (bias={biases_danger['FLEE']})")
-    else:
-        fail("Enemy near no elige FLEE",
-             f"eligio={best_danger}, biases={biases_danger}")
-
-except Exception as e:
-    fail("Heurísticas collector", traceback.format_exc())
-
-# ============================================================
-# 6. GUARD — atributos y pending_reward
-# ============================================================
-section("6. GUARD — atributos y pending_reward")
-
-try:
-    env4, _, gql4 = make_env_headless(0)
-    g = env4.guards[0]
+    env2, _, gql2 = make_env_headless(0)
+    g = env2.guards[0]
 
     if hasattr(g, '_pending_reward'):
         ok("Guard tiene _pending_reward")
     else:
         fail("Guard NO tiene _pending_reward")
 
+    if hasattr(g, 'is_alive') and g.is_alive:
+        ok("Guard nace vivo")
+    else:
+        fail("Guard no tiene is_alive o nace muerto")
+
     # receive_reward acumula
+    before = g._pending_reward
     g.receive_reward('kill_hunter')
-    g.receive_reward('protect_collector')
-    from utils.constants import REWARD_KILL_HUNTER, REWARD_PROTECT_COLLECTOR
-    expected_g = REWARD_KILL_HUNTER + REWARD_PROTECT_COLLECTOR
-    if abs(g._pending_reward - expected_g) < 0.01:
-        ok(f"Guard receive_reward acumula correctamente ({g._pending_reward} = {expected_g})")
+    if g._pending_reward >= before + REWARD_KILL_HUNTER:
+        ok(f"Guard receive_reward kill_hunter acumula (delta >= {REWARD_KILL_HUNTER})")
     else:
-        fail("Guard receive_reward no acumula",
-             f"esperado={expected_g}, obtenido={g._pending_reward}")
+        fail("Guard receive_reward kill_hunter no acumula",
+             f"antes={before}, despues={g._pending_reward}")
 
 except Exception as e:
-    fail("Guard atributos", traceback.format_exc())
+    fail("Guard atributos/receive_reward", traceback.format_exc())
 
 # ============================================================
-# 7. GUARD — HEURÍSTICAS: SCOUT no gana con enemy_near
+# 5. COLLECTOR — heurísticas correctas según estado
 # ============================================================
-section("7. GUARD — SCOUT vs INTERCEPT con enemy_near")
+section("5. COLLECTOR — selección de acción por heurísticas")
 
 try:
-    env5, _, _ = make_env_headless(0)
-    g5 = env5.guards[0]
+    env3, cql3, _ = make_env_headless(0)
+    c3 = env3.collectors[0]
 
-    # Estado con enemy_near=1, fuera de rango, frontera cercana, fase EARLY
-    # (enemy_near, enemy_in_range, collector_near, collector_vulnerable,
-    #  risk_level, cooldown_ready, distance_to_enemy, numerical_advantage,
-    #  guards_near_collector, collector_near_base, unexplored_frontier_near, collector_carrying)
-    state_enemy = (1, 0, 0, 0, 1, 1, 1, 1, 0, 0, 1, 0)
-    biases_enemy = g5.calculate_heuristic_biases(
-        state_enemy, "EARLY",
-        {'tower_count': 0, 'recent_enemy_sighting': False,
-         'collector_has_kit': False, 'guards_near_my_collector': 0,
-         'collector_near_base': 0, 'escorted_collector_collected': False}
-    )
-    best_enemy = max(biases_enemy, key=lambda a: biases_enemy[a])
-    scout_val = biases_enemy['SCOUT']
-    intercept_val = biases_enemy['INTERCEPT']
-
-    if best_enemy in ('INTERCEPT', 'ATTACK') and scout_val < intercept_val:
-        ok(f"Con enemy_near: SCOUT ({scout_val}) < INTERCEPT ({intercept_val}) -> elige {best_enemy}")
+    # Estado: hunter_near=1 -> FLEE debe dominar
+    # (build_dist, explore_dist, resource_dist, can_carry, hunter_near)
+    state_danger = (0, 1, 1, 1, 1)
+    biases_danger = c3.calculate_heuristic_biases(state_danger, [])
+    best = max(biases_danger, key=lambda a: biases_danger[a])
+    if best == 'FLEE':
+        ok(f"hunter_near=1 -> FLEE (bias={biases_danger['FLEE']})")
     else:
-        fail("Con enemy_near SCOUT deberia perder ante INTERCEPT",
-             f"SCOUT={scout_val}, INTERCEPT={intercept_val}, mejor={best_enemy}")
+        fail("hunter_near=1 no elige FLEE",
+             f"eligio={best}, biases={biases_danger}")
 
-    # Sin enemy: SCOUT debe ganar en EARLY
-    state_no_enemy = (0, 0, 0, 0, 0, 1, 2, 2, 0, 0, 1, 0)
-    biases_no_enemy = g5.calculate_heuristic_biases(
-        state_no_enemy, "EARLY",
-        {'tower_count': 0, 'recent_enemy_sighting': False,
-         'collector_has_kit': False, 'guards_near_my_collector': 0,
-         'collector_near_base': 0, 'escorted_collector_collected': False}
-    )
-    best_no_enemy = max(biases_no_enemy, key=lambda a: biases_no_enemy[a])
-    if best_no_enemy == 'SCOUT':
-        ok(f"Sin enemy en EARLY: SCOUT gana (bias={biases_no_enemy['SCOUT']})")
+    # Estado: inventario lleno (can_carry=0), sin hunter -> RETURN_TO_BASE
+    state_full = (0, 1, 1, 0, 0)
+    biases_full = c3.calculate_heuristic_biases(state_full, [])
+    best_full = max(biases_full, key=lambda a: biases_full[a])
+    if best_full == 'RETURN_TO_BASE':
+        ok(f"can_carry=0, sin hunter -> RETURN_TO_BASE (bias={biases_full['RETURN_TO_BASE']})")
     else:
-        fail("Sin enemy en EARLY SCOUT deberia ganar",
-             f"eligio={best_no_enemy}, biases={biases_no_enemy}")
+        fail("can_carry=0 no elige RETURN_TO_BASE",
+             f"eligio={best_full}, biases={biases_full}")
+
+    # Estado: vacío, recurso cerca (can_carry=1, resource_dist=1, sin hunter) -> GO_TO_RESOURCE
+    state_empty = (0, 1, 1, 1, 0)
+    biases_empty = c3.calculate_heuristic_biases(state_empty, [])
+    best_empty = max(biases_empty, key=lambda a: biases_empty[a])
+    if best_empty == 'GO_TO_RESOURCE':
+        ok(f"can_carry=1, resource_dist=1 -> GO_TO_RESOURCE (bias={biases_empty['GO_TO_RESOURCE']})")
+    else:
+        fail("vacío+recurso cercano no elige GO_TO_RESOURCE",
+             f"eligio={best_empty}, biases={biases_empty}")
+
+    # Estado: tiene kit (build_dist=1), vacío, sin hunter -> BUILD_TOWER
+    state_kit = (1, 1, 0, 1, 0)
+    biases_kit = c3.calculate_heuristic_biases(state_kit, [])
+    best_kit = max(biases_kit, key=lambda a: biases_kit[a])
+    if best_kit == 'BUILD_TOWER':
+        ok(f"build_dist=1, sin hunter -> BUILD_TOWER (bias={biases_kit['BUILD_TOWER']})")
+    else:
+        fail("tiene kit y no elige BUILD_TOWER",
+             f"eligio={best_kit}, biases={biases_kit}")
 
 except Exception as e:
-    fail("Guard heurísticas SCOUT/INTERCEPT", traceback.format_exc())
+    fail("Heurísticas collector", traceback.format_exc())
 
 # ============================================================
-# 8. INTEGRACIÓN — episodio corto headless (0 cazadores)
+# 6. GUARD — heurísticas correctas según estado
 # ============================================================
-section("8. INTEGRACIÓN — episodio headless 0 cazadores (200 ticks)")
+section("6. GUARD — selección de acción por heurísticas")
 
 try:
-    env6, cql6, gql6 = make_env_headless(0)
+    env4, _, _ = make_env_headless(0)
+    g4 = env4.guards[0]
+
+    # (ally_in_danger, i_am_in_danger, hunter_near, can_attack)
+
+    # can_attack=1 -> ATTACK domina
+    state_attack = (0, 0, 1, 1)
+    biases_attack = g4.calculate_heuristic_biases(state_attack)
+    best_attack = max(biases_attack, key=lambda a: biases_attack[a])
+    if best_attack == 'ATTACK':
+        ok(f"can_attack=1 -> ATTACK (bias={biases_attack['ATTACK']})")
+    else:
+        fail("can_attack=1 no elige ATTACK",
+             f"eligio={best_attack}, biases={biases_attack}")
+
+    # i_am_in_danger=1, can_attack=0 -> FLEE
+    state_flee = (0, 1, 1, 0)
+    biases_flee = g4.calculate_heuristic_biases(state_flee)
+    best_flee = max(biases_flee, key=lambda a: biases_flee[a])
+    if best_flee == 'FLEE':
+        ok(f"i_am_in_danger=1, can_attack=0 -> FLEE (bias={biases_flee['FLEE']})")
+    else:
+        fail("i_am_in_danger=1 no elige FLEE",
+             f"eligio={best_flee}, biases={biases_flee}")
+
+    # ally_in_danger=1, i_am_in_danger=0, can_attack=0 -> DEFEND
+    state_defend = (1, 0, 0, 0)
+    biases_defend = g4.calculate_heuristic_biases(state_defend)
+    best_defend = max(biases_defend, key=lambda a: biases_defend[a])
+    if best_defend == 'DEFEND':
+        ok(f"ally_in_danger=1, sin peligro propio -> DEFEND (bias={biases_defend['DEFEND']})")
+    else:
+        fail("ally_in_danger=1 sin peligro propio no elige DEFEND",
+             f"eligio={best_defend}, biases={biases_defend}")
+
+    # Sin peligro ni cazador -> EXPLORE (comportamiento base)
+    state_idle = (0, 0, 0, 0)
+    biases_idle = g4.calculate_heuristic_biases(state_idle)
+    best_idle = max(biases_idle, key=lambda a: biases_idle[a])
+    if best_idle == 'EXPLORE':
+        ok(f"sin amenazas -> EXPLORE (bias={biases_idle['EXPLORE']})")
+    else:
+        fail("sin amenazas no elige EXPLORE",
+             f"eligio={best_idle}, biases={biases_idle}")
+
+except Exception as e:
+    fail("Heurísticas guard", traceback.format_exc())
+
+# ============================================================
+# 7. INTEGRACIÓN — episodio corto headless (0 cazadores)
+# ============================================================
+section("7. INTEGRACIÓN — episodio headless 0 cazadores (200 ticks)")
+
+try:
+    env5, cql5, gql5 = make_env_headless(0)
     ticks_run = 0
     for _ in range(200):
-        env6.tick()
+        env5.tick()
         ticks_run += 1
-        if env6.game_over:
+        if env5.game_over:
             break
 
     ok(f"Episodio completó {ticks_run} ticks sin crash")
 
-    resources_pct = (env6.base_resources / env6.win_target * 100
-                     if env6.win_target > 0 else 0)
-    ok(f"Recursos depositados: {env6.base_resources}/{env6.win_target:.0f} ({resources_pct:.1f}%)")
-
-    alive_c = sum(1 for c in env6.collectors if c.is_alive)
-    alive_g = sum(1 for g in env6.guards if g.is_alive)
+    alive_c = sum(1 for c in env5.collectors if c.is_alive)
+    alive_g = sum(1 for g in env5.guards if g.is_alive)
     ok(f"Agentes vivos: {alive_c} recolectores, {alive_g} guardias")
 
-    q_sizes_ok = len(cql6.Q_table) >= 0 and len(gql6.Q_table) >= 0
-    ok(f"Q-tables activas: C={len(cql6.Q_table)} estados, G={len(gql6.Q_table)} estados")
+    ok(f"Q-tables activas: C={len(cql5.Q_table)} estados, G={len(gql5.Q_table)} estados")
 
 except Exception as e:
     fail("Integración headless 0 cazadores", traceback.format_exc())
 
 # ============================================================
-# 9. INTEGRACIÓN — episodio con cazadores (Fase 2 simulada)
+# 8. INTEGRACIÓN — episodio con cazadores
 # ============================================================
-section("9. INTEGRACIÓN — episodio headless 4 cazadores (200 ticks)")
+section("8. INTEGRACIÓN — episodio headless 4 cazadores (200 ticks)")
 
 try:
-    env7, cql7, gql7 = make_env_headless(4)
-    ticks_run7 = 0
+    env6, cql6, gql6 = make_env_headless(4)
+    ticks_run6 = 0
     for _ in range(200):
-        env7.tick()
-        ticks_run7 += 1
-        if env7.game_over:
+        env6.tick()
+        ticks_run6 += 1
+        if env6.game_over:
             break
 
-    ok(f"Episodio con 4 cazadores: {ticks_run7} ticks sin crash")
+    ok(f"Episodio con 4 cazadores: {ticks_run6} ticks sin crash")
 
-    if env7.game_over:
-        ok(f"Juego terminó correctamente — ganador: Equipo {env7.winner}")
+    if env6.game_over:
+        ok(f"Juego terminó correctamente — ganador: Equipo {env6.winner}")
     else:
-        ok("Juego llegó al límite de ticks (sin ganador aún, normal en 200 ticks)")
+        ok("Juego llegó al límite de ticks sin ganador (normal en 200 ticks)")
 
 except Exception as e:
     fail("Integración headless 4 cazadores", traceback.format_exc())
 
 # ============================================================
-# 10. INTEGRACIÓN — Q-learning aprende (Q-values cambian)
+# 9. Q-LEARNING — valores cambian tras episodio
 # ============================================================
-section("10. Q-LEARNING — valores cambian tras episodio completo")
+section("9. Q-LEARNING — Q-values se actualizan tras 50 ticks")
 
 try:
-    import copy
-    env8, cql8, gql8 = make_env_headless(0)
+    env7, cql7, gql7 = make_env_headless(0)
 
-    # Correr 50 ticks para acumular algunas actualizaciones
     for _ in range(50):
-        env8.tick()
-        if env8.game_over:
+        env7.tick()
+        if env7.game_over:
             break
 
-    if len(cql8.Q_table) > 0:
-        # Verificar que al menos algún Q-value es distinto de 0
+    if len(cql7.Q_table) > 0:
         any_nonzero_c = any(
             v != 0.0
-            for state_dict in cql8.Q_table.values()
+            for state_dict in cql7.Q_table.values()
             for v in state_dict.values()
         )
         if any_nonzero_c:
-            ok(f"Collector Q-table tiene valores no-cero ({len(cql8.Q_table)} estados visitados)")
+            ok(f"Collector Q-table tiene valores no-cero ({len(cql7.Q_table)} estados)")
         else:
             fail("Collector Q-table solo tiene ceros tras 50 ticks")
     else:
         fail("Collector Q-table vacía tras 50 ticks")
 
-    # Con 0 cazadores, el guardia no recibe eventos de combate → rewards siempre 0.
-    # Lo importante es que visita estados (Q-table crece) y no crashea.
-    if len(gql8.Q_table) > 0:
-        ok(f"Guard Q-table visita estados ({len(gql8.Q_table)} estados, rewards 0 sin cazadores — esperado)")
+    if len(gql7.Q_table) > 0:
+        ok(f"Guard Q-table visita estados ({len(gql7.Q_table)} estados)")
     else:
-        fail("Guard Q-table vacia tras 50 ticks — no visita ningun estado")
+        fail("Guard Q-table vacía tras 50 ticks — no visita ningún estado")
 
 except Exception as e:
     fail("Q-learning actualización", traceback.format_exc())
 
 # ============================================================
-# 11. RECURSOS SE DEPOSITAN (regresión del bug de stagnation)
+# 10. RECURSOS SE DEPOSITAN (regresión: los recolectores no se atascan)
 # ============================================================
-section("11. REGRESIÓN — recursos depositados en episodio largo (sin cazadores)")
+section("10. REGRESIÓN — recursos depositados en episodio largo (sin cazadores)")
 
 try:
-    env9, cql9, gql9 = make_env_headless(0)
+    env8, cql8, gql8 = make_env_headless(0)
     for _ in range(1000):
-        env9.tick()
-        if env9.game_over:
+        env8.tick()
+        if env8.game_over:
             break
 
-    pct = env9.base_resources / env9.win_target * 100 if env9.win_target > 0 else 0
+    pct = (env8.base_resources / env8.win_target * 100
+           if env8.win_target > 0 else 0)
 
-    if env9.base_resources > 0:
-        ok(f"Se depositaron recursos: {env9.base_resources}/{env9.win_target:.0f} ({pct:.1f}%)")
+    if env8.base_resources > 0:
+        ok(f"Se depositaron recursos: {env8.base_resources}/{env8.win_target:.0f} ({pct:.1f}%)")
     else:
         fail("Ningún recurso depositado en 1000 ticks sin cazadores")
 
-    # Con epsilon=0.5 (test), la mitad de las decisiones son aleatorias.
-    # En entrenamiento real (epsilon 0.08-0.20) el rendimiento es mucho mayor.
-    # Umbral de 15%: demuestra que el fix funciona (antes era 0% con el bug).
+    # Con epsilon=0.5 (exploratorio) el progreso mínimo esperado es 15%.
+    # En entrenamiento real (epsilon bajo) es mucho mayor.
     if pct >= 15:
-        ok(f"Progreso {pct:.1f}% >= 15% en 1000 ticks (stagnation fix activo; con epsilon real sera mayor)")
+        ok(f"Progreso {pct:.1f}% >= 15% en 1000 ticks")
     else:
-        fail(f"Progreso {pct:.1f}% < 15% incluso con epsilon alto — bug residual posible")
+        fail(f"Progreso {pct:.1f}% < 15% — posible bug de estancamiento",
+             "Los recolectores no están depositando recursos en la base")
 
-    if env9.game_over and env9.winner == 'A':
-        ok(f"¡Equipo A GANÓ en {env9.current_tick} ticks!")
+    if env8.game_over and env8.winner == 'A':
+        ok(f"¡Equipo A ganó en {env8.current_tick} ticks!")
 
 except Exception as e:
     fail("Regresión depósito de recursos", traceback.format_exc())
+
+# ============================================================
+# 11. ESTADO — dimensiones correctas del vector de estado
+# ============================================================
+section("11. DIMENSIÓN DEL VECTOR DE ESTADO")
+
+try:
+    env9, _, _ = make_env_headless(0)
+    # Correr 1 tick para que los agentes tengan prev_state
+    env9.tick()
+
+    c9 = env9.collectors[0]
+    if c9.prev_state is not None:
+        if len(c9.prev_state) == 5:
+            ok(f"Collector state tiene 5 variables: {c9.prev_state}")
+        else:
+            fail(f"Collector state debería tener 5 variables, tiene {len(c9.prev_state)}",
+                 str(c9.prev_state))
+    else:
+        fail("Collector no generó prev_state tras 1 tick")
+
+    g9 = env9.guards[0]
+    if g9.prev_state is not None:
+        if len(g9.prev_state) == 4:
+            ok(f"Guard state tiene 4 variables: {g9.prev_state}")
+        else:
+            fail(f"Guard state debería tener 4 variables, tiene {len(g9.prev_state)}",
+                 str(g9.prev_state))
+    else:
+        fail("Guard no generó prev_state tras 1 tick")
+
+except Exception as e:
+    fail("Dimensión del estado", traceback.format_exc())
+
+# ============================================================
+# 12. MUERTE — agente muerto no actúa
+# ============================================================
+section("12. MUERTE — agente muerto no modifica estado")
+
+try:
+    env10, _, _ = make_env_headless(0)
+    c10 = env10.collectors[0]
+
+    pos_before = c10.position
+    c10.die()
+
+    if not c10.is_alive:
+        ok("die() marca is_alive=False")
+    else:
+        fail("die() no marcó is_alive=False")
+
+    if c10.carrying_resources == 0:
+        ok("die() limpia carrying_resources")
+    else:
+        fail(f"die() no limpió carrying_resources: {c10.carrying_resources}")
+
+    # Ejecutar algunos ticks y verificar que el agente muerto no se mueve
+    for _ in range(5):
+        env10.tick()
+
+    if c10.position == pos_before:
+        ok("Agente muerto no cambia de posición")
+    else:
+        fail("Agente muerto cambió de posición",
+             f"antes={pos_before}, después={c10.position}")
+
+except Exception as e:
+    fail("Muerte del agente", traceback.format_exc())
 
 # ============================================================
 # RESULTADO FINAL

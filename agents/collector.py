@@ -7,83 +7,77 @@ from utils.constants import (
     BASE_POSITION,
     MAP_WIDTH,
     MAP_HEIGHT,
-    PHASE_EARLY_THRESHOLD,
-    PHASE_MID_THRESHOLD,
-    HEUR_FLEE_ENEMY_NEAR,
-    HEUR_FLEE_ENEMY_NO_GUARD,
+    HEUR_FLEE_HUNTER,
     HEUR_RETURN_FULL,
-    HEUR_RETURN_PARTIAL_FACTOR,
-    HEUR_RETURN_EMPTY_PENALTY,
-    HEUR_GOTO_RESOURCE_BASE,
-    HEUR_GOTO_RESOURCE_EMPTY_BONUS,
-    HEUR_GOTO_RESOURCE_NO_GUARD,
-    HEUR_GOTO_RESOURCE_MID_BONUS,
-    HEUR_EXPLORE_LOW_COVERAGE,
-    HEUR_EXPLORE_NO_RESOURCES_KNOWN,
-    HEUR_EXPLORE_NO_GUARD_PENALTY,
-    HEUR_EXPLORE_EARLY_BONUS,
     HEUR_BUILD_HAS_KIT,
-    HEUR_BUILD_TOO_MANY_TOWERS,
-    HEUR_BUILD_LAST_COLLECTOR,
-    HEUR_BUILD_LOW_EXPLORATION,
-    STAGNATION_THRESHOLD,
-    STAGNATION_PENALTY_RATE,
-    MAX_TOWERS_PER_EXPLORATION,
-    EARLY_GAME_FLEE_BONUS,
-    REWARD_DELIVER_RESOURCES,
-    REWARD_COLLECT,
-    REWARD_EXPLORE,
-    REWARD_BUILD_TOWER,
-    REWARD_DANGER_ZONE,
-    REWARD_LOSE_RESOURCES,
-    REWARD_COLLECTOR_DIE,
-    REWARD_IDLE,
-    REWARD_RETURN_EMPTY,
+    HEUR_GOTO_RESOURCE_BASE,
+    REWARD_APPROACH_EXPLORE,
+    REWARD_CELL_EXPLORED,
     REWARD_APPROACH_RESOURCE,
-    REWARD_STAGNATION,
-    REWARD_EXPLORE_WITH_ESCORT,
-    RISK_UNEXPLORED,
+    REWARD_COLLECT,
+    REWARD_GOING_TO_BASE_RES,
+    REWARD_DELIVER_RESOURCES,
+    REWARD_APPROACH_BUILD,
+    REWARD_BUILD_NO_KIT,
+    REWARD_BUILD_TOWER,
+    REWARD_GUARD_NEARBY,
+    REWARD_TOWER_NEARBY,
+    REWARD_FLEE_HUNTER,
+    REWARD_HUNTER_NEAR,
+    REWARD_COLLECTOR_DIE,
+    REWARD_BASE_NO_RES,
+    REWARD_RESOURCE_FULL,
+    REWARD_EXPLORE_WITH_KIT,
+    REWARD_BAD_ACTION_HUNTER,
+    REWARD_FLEE_NO_HUNTER,
+    REWARD_APPROACH_BASE,
 )
 from pathfinding.astar import find_path
 
 # Acciones disponibles del recolector
 ACTIONS = ['EXPLORE', 'GO_TO_RESOURCE', 'RETURN_TO_BASE', 'FLEE', 'BUILD_TOWER']
 
-# Umbrales del mapa de riesgo para discretización
-_RISK_LOW  = 0.3
-_RISK_HIGH = 0.7
+# Umbrales de distancia para discretización del estado
+_DIST_BUILD_CLOSE    = 5   # build target se considera "cerca"
+_DIST_EXPLORE_CLOSE  = 8   # celda explorar se considera "cerca"
+_DIST_RESOURCE_CLOSE = 5   # recurso se considera "cerca"
+
+# Radio de "cerca" para peligro en el cálculo de aliados
+_ALLY_NEAR_RANGE = 5
 
 
 class Collector:
     """
     Recolector del Equipo A.
 
-    Toma decisiones mediante Q-learning compartido + heurísticas.
-    Pathfinding A* restringido a su known_map (fog of war real).
-    Muerte permanente (sin respawn).
-    Estado RL expandido: 10 variables.
+    Estado RL (5 variables):
+      (build_dist, explore_dist, resource_dist, can_carry, hunter_near)
+
+    Acciones: EXPLORE, GO_TO_RESOURCE, RETURN_TO_BASE, FLEE, BUILD_TOWER
+
+    Pathfinding A* con mapa de riesgo (costo = 1 + risk_map).
+    Muerte permanente.
     """
 
     def __init__(self, position, shared_data, q_learning):
-        # Posición y stats
-        self.position          = position
-        self.hp                = COLLECTOR_HP
-        self.current_hp        = COLLECTOR_HP
-        self.speed             = COLLECTOR_SPEED
-        self.vision_range      = COLLECTOR_VISION
+        self.position           = position
+        self.hp                 = COLLECTOR_HP
+        self.current_hp         = COLLECTOR_HP
+        self.speed              = COLLECTOR_SPEED
+        self.vision_range       = COLLECTOR_VISION
         self.carrying_resources = 0
-        self.carrying_capacity = COLLECTOR_CARRY_CAPACITY
-        self.has_build_kit     = False
-        self.is_alive          = True
+        self.carrying_capacity  = COLLECTOR_CARRY_CAPACITY
+        self.has_build_kit      = False
+        self.is_alive           = True
 
-        # Memoria compartida (referencias)
-        self.shared_data         = shared_data
-        self.known_map           = shared_data['known_map']
+        # Memoria compartida
+        self.shared_data          = shared_data
+        self.known_map            = shared_data['known_map']
         self.discovered_resources = shared_data['discovered_resources']
-        self.last_seen_enemies   = shared_data['last_seen_enemies']
-        self.risk_map            = shared_data['risk_map']
+        self.last_seen_enemies    = shared_data['last_seen_enemies']
+        self.risk_map             = shared_data['risk_map']
 
-        # Q-learning compartido con todos los recolectores
+        # Q-learning compartido
         self.q_learning = q_learning
 
         # Estado interno
@@ -92,27 +86,23 @@ class Collector:
         self.current_path   = []
         self.prev_state     = None
         self.prev_action    = None
-
-        # Posición siguiente calculada en decide()
         self.next_position  = position
 
-        # Señalización de construcción de torre
+        # Señalización de construcción
         self.wants_to_build = False
         self.build_target   = None
 
-        # Referencia al grid actual (actualizada al inicio de decide)
+        # Referencia al grid (actualizada en decide)
         self._last_grid = None
 
-        # Tracking de progreso (anti-estancamiento)
-        self.current_action_streak  = 0
-        self.ticks_since_progress   = 0
-        self._prev_resources_carried = 0
-        self._prev_explored_count    = 0
-        bx, by = BASE_POSITION
-        px, py = position
-        self._prev_dist_to_base = abs(px - bx) + abs(py - by)
+        # Para cálculo de recompensas de acercamiento
+        self._prev_dist_explore  = None
+        self._prev_dist_resource = None
+        self._prev_dist_build    = None
+        self._prev_dist_base     = None
+        self._cells_explored_this_tick = 0
 
-        # Recompensas de eventos pendientes (aplicadas en el siguiente decide())
+        # Recompensas de eventos pendientes
         self._pending_reward = 0.0
 
     # ===================================================================
@@ -129,6 +119,7 @@ class Collector:
         visible_enemies   = []
         visible_resources = []
         visible_allies    = []
+        self._cells_explored_this_tick = 0
 
         for dx in range(-self.vision_range, self.vision_range + 1):
             for dy in range(-self.vision_range, self.vision_range + 1):
@@ -139,10 +130,11 @@ class Collector:
                     continue
 
                 cell = grid.cells[nx][ny]
-
-                self.known_map[nx][ny]['explored']       = True
-                self.known_map[nx][ny]['last_seen']       = current_tick
-                self.known_map[nx][ny]['last_known_type'] = cell.type
+                if not self.known_map[nx][ny].get('explored', False):
+                    self._cells_explored_this_tick += 1
+                self.known_map[nx][ny]['explored']        = True
+                self.known_map[nx][ny]['last_seen']        = current_tick
+                self.known_map[nx][ny]['last_known_type']  = cell.type
 
                 if cell.type == 'resource' and cell.resource_amount > 0:
                     existing = next(
@@ -196,305 +188,13 @@ class Collector:
         return visible_enemies, visible_resources, visible_allies
 
     # ===================================================================
-    # ESTADO RL (10 variables)
+    # CÁLCULO DE OBJETIVOS (pre-estado)
     # ===================================================================
 
-    def build_state(self, visible_enemies, visible_allies):
+    def _find_best_build_cell(self):
         """
-        Construye la tupla de estado discreta para Q-learning (10 variables):
-          (enemy_near, carrying, is_full, risk_level, guard_near, tower_near,
-           has_build_kit, resources_known, near_base, explored_level)
-
-        risk_level:     0=LOW, 1=MED, 2=HIGH
-        explored_level: 0=LOW(<30%), 1=MED(30-65%), 2=HIGH(>65%)
-        """
-        px, py = self.position
-
-        enemy_near = 1 if visible_enemies else 0
-        carrying   = 1 if self.carrying_resources > 0 else 0
-        is_full    = 1 if self.carrying_resources >= self.carrying_capacity else 0
-
-        r = self.risk_map[px][py]
-        if r < _RISK_LOW:
-            risk_level = 0
-        elif r < _RISK_HIGH:
-            risk_level = 1
-        else:
-            risk_level = 2
-
-        guard_near = int(
-            any(a.__class__.__name__ == 'Guard' for a in visible_allies)
-        )
-        tower_near = int(
-            any(a.__class__.__name__ == 'Tower' for a in visible_allies)
-        )
-        has_kit = 1 if self.has_build_kit else 0
-
-        # Nuevas variables
-        resources_known = 1 if self.discovered_resources else 0
-
-        dist_base = abs(px - BASE_POSITION[0]) + abs(py - BASE_POSITION[1])
-        near_base = 1 if dist_base <= 5 else 0
-
-        explored_count = self.shared_data.get('explored_count', 0)
-        explored_pct   = explored_count / (MAP_WIDTH * MAP_HEIGHT)
-        if explored_pct < PHASE_EARLY_THRESHOLD:
-            explored_level = 0
-        elif explored_pct < PHASE_MID_THRESHOLD:
-            explored_level = 1
-        else:
-            explored_level = 2
-
-        return (enemy_near, carrying, is_full, risk_level, guard_near,
-                tower_near, has_kit, resources_known, near_base, explored_level)
-
-    # ===================================================================
-    # HEURISTIC BIASES
-    # ===================================================================
-
-    def calculate_heuristic_biases(self, state, phase, game_context):
-        """
-        Retorna dict {action: float} con sesgos heurísticos sobre Q-values.
-        Las heurísticas son "reglas de emergencia" que complementan al RL.
-        """
-        (enemy_near, carrying, is_full, risk_level, guard_near,
-         tower_near, has_build_kit, resources_known, near_base,
-         explored_level) = state
-
-        biases = {a: 0.0 for a in ACTIONS}
-
-        # -- FLEE (emergencia — siempre domina si aplica) ---------------
-        if enemy_near:
-            min_enemy_dist = game_context.get('min_enemy_dist', 0)
-            if min_enemy_dist <= 3:
-                flee_scale = 1.0       # muy cerca: dominante
-            elif min_enemy_dist <= 6:
-                flee_scale = 0.5       # distancia media: moderado
-            else:
-                flee_scale = 0.2       # lejos: solo sugerencia
-            biases['FLEE'] += HEUR_FLEE_ENEMY_NEAR * flee_scale
-            if not guard_near:
-                biases['FLEE'] += HEUR_FLEE_ENEMY_NO_GUARD * flee_scale
-        if phase == "EARLY" and enemy_near:
-            biases['FLEE'] += EARLY_GAME_FLEE_BONUS
-
-        # -- RETURN_TO_BASE ---------------------------------------------
-        if is_full:
-            biases['RETURN_TO_BASE'] += HEUR_RETURN_FULL
-        elif carrying:
-            fill_ratio = game_context['carrying_resources'] / game_context['carrying_capacity']
-            biases['RETURN_TO_BASE'] += int(HEUR_RETURN_PARTIAL_FACTOR * fill_ratio)
-        else:
-            # Si está vacío y ya está en la base, desincentivar regresar
-            # (evita que se quede merodeando). Fuera de la base, dejar que Q-learning decida.
-            if near_base:
-                biases['RETURN_TO_BASE'] -= 30
-
-        # -- GO_TO_RESOURCE ---------------------------------------------
-        if resources_known:
-            biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_BASE
-            if not carrying:
-                biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_EMPTY_BONUS
-            if risk_level >= 2 and not guard_near:
-                # Animar en lugar de penalizar: el Q-learning y FLEE manejan el peligro letal
-                biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_NO_GUARD  # +20
-            if phase == "MID" and not carrying:
-                biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_MID_BONUS
-            elif phase == "LATE" and not carrying:
-                biases['GO_TO_RESOURCE'] += 50  # LATE: recolectar agresivamente
-
-        # -- EXPLORE ----------------------------------------------------
-        if explored_level == 0:
-            biases['EXPLORE'] += HEUR_EXPLORE_LOW_COVERAGE
-        if not resources_known:
-            biases['EXPLORE'] += HEUR_EXPLORE_NO_RESOURCES_KNOWN
-        if phase == "EARLY":
-            # En EARLY la exploración domina: no penalizar por riesgo
-            biases['EXPLORE'] += HEUR_EXPLORE_EARLY_BONUS
-        else:
-            # MID/LATE: penalizar si no hay cobertura cercana
-            if not guard_near and not tower_near:
-                if risk_level >= 2:
-                    biases['EXPLORE'] += HEUR_EXPLORE_NO_GUARD_PENALTY   # -60
-                elif risk_level == 1:
-                    biases['EXPLORE'] -= 20
-        # Bonus por explorar escoltado cuando aún no hay recursos conocidos
-        if guard_near and not resources_known:
-            biases['EXPLORE'] += 60
-
-        # -- BUILD_TOWER ------------------------------------------------
-        if has_build_kit:
-            biases['BUILD_TOWER'] += HEUR_BUILD_HAS_KIT
-            explored_pct = game_context.get('explored_percent', 0.0)
-            max_t = max(2, int(explored_pct * MAP_WIDTH * MAP_HEIGHT
-                               * MAX_TOWERS_PER_EXPLORATION))
-            if game_context['tower_count'] >= max_t:
-                biases['BUILD_TOWER'] += HEUR_BUILD_TOO_MANY_TOWERS
-            if game_context['num_alive_collectors'] <= 1:
-                biases['BUILD_TOWER'] += HEUR_BUILD_LAST_COLLECTOR
-            if explored_level == 0:
-                biases['BUILD_TOWER'] += HEUR_BUILD_LOW_EXPLORATION
-        else:
-            biases['BUILD_TOWER'] -= 50.0
-
-        # -- ANTI-ESTANCAMIENTO ----------------------------------------
-        stagnation = game_context['ticks_since_progress']
-
-        # El streak solo penaliza cuando hay estancamiento real (sin progreso).
-        # Si ticks_since_progress == 0 el agente avanza hacia un objetivo
-        # productivo (acercándose a la base, explorando, recolectando):
-        # penalizar la acción repetida sería romper un comportamiento correcto.
-        streak = game_context['current_action_streak']
-        if streak > STAGNATION_THRESHOLD and stagnation > 0 and self.current_action in biases:
-            biases[self.current_action] -= (
-                STAGNATION_PENALTY_RATE * (streak - STAGNATION_THRESHOLD)
-            )
-
-        if stagnation > STAGNATION_THRESHOLD:
-            biases['GO_TO_RESOURCE'] += stagnation * 3
-            biases['EXPLORE']        += stagnation * 2
-
-        return biases
-
-    # ===================================================================
-    # EJECUCIÓN DE ACCIONES
-    # ===================================================================
-
-    def execute_explore(self, all_collectors):
-        """
-        Selecciona la celda frontera no explorada con mayor score.
-        Prioriza celdas con guardias o torres cercanas.
-        """
-        px, py = self.position
-        best_cell  = None
-        best_score = float('-inf')
-
-        for x in range(MAP_WIDTH):
-            for y in range(MAP_HEIGHT):
-                if self.known_map[x][y].get('explored', False):
-                    continue
-                is_frontier = any(
-                    0 <= x + dx < MAP_WIDTH and 0 <= y + dy < MAP_HEIGHT
-                    and self.known_map[x + dx][y + dy].get('explored', False)
-                    for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]
-                )
-                if not is_frontier:
-                    continue
-
-                dist = abs(x - px) + abs(y - py)
-                # Celdas desconocidas no se penalizan por riesgo (son oportunidades)
-                risk = (self.risk_map[x][y] if self.known_map[x][y].get('explored', False)
-                        else 0.0)
-                other_heading = sum(
-                    1 for c in all_collectors
-                    if c is not self and c.is_alive and c.current_target == (x, y)
-                )
-                score = 100.0 - dist * 0.5 - risk * 8.0 - other_heading * 15.0
-                if score > best_score:
-                    best_score = score
-                    best_cell  = (x, y)
-
-        if best_cell is None:
-            return []
-        self.current_target = best_cell
-        return self._astar(best_cell)
-
-    def execute_go_to_resource(self, all_collectors):
-        """
-        Selecciona el recurso óptimo de discovered_resources.
-        """
-        px, py = self.position
-        best_resource = None
-        best_score    = float('-inf')
-
-        for res in self.discovered_resources:
-            rx, ry = res['position']
-            dist   = abs(rx - px) + abs(ry - py)
-            risk   = (self.risk_map[rx][ry] if self.known_map[rx][ry].get('explored', False)
-                      else RISK_UNEXPLORED)
-            others_going = sum(
-                1 for c in all_collectors
-                if c is not self and c.is_alive and c.current_target == (rx, ry)
-            )
-            size_bonus = min(10.0, res['amount'] / 5.0)
-            score = res['amount'] - dist * 0.5 - risk * 5.0 - others_going * 5.0 + size_bonus
-            if score > best_score:
-                best_score    = score
-                best_resource = res
-
-        if best_resource is None:
-            return self.execute_explore(all_collectors)
-
-        self.current_target = best_resource['position']
-        return self._astar(best_resource['position'])
-
-    def execute_return_to_base(self):
-        """Pathfinding A* hacia BASE_POSITION."""
-        self.current_target = BASE_POSITION
-        return self._astar(BASE_POSITION)
-
-    def execute_flee(self, visible_enemies, visible_allies):
-        """
-        Evalúa opciones de escape y elige la de mayor score.
-        """
-        px, py = self.position
-        options = []
-
-        towers = [a for a in visible_allies if a.__class__.__name__ == 'Tower']
-        for t in towers:
-            d = abs(t.position[0] - px) + abs(t.position[1] - py)
-            options.append({'pos': t.position, 'score': -d + 30.0})
-
-        guards = [a for a in visible_allies if a.__class__.__name__ == 'Guard']
-        for g in guards:
-            d = abs(g.position[0] - px) + abs(g.position[1] - py)
-            # Bonus si el guardia está lejos de los enemigos (es un refugio real)
-            guard_safety = sum(
-                10.0
-                for enemy in visible_enemies
-                if (abs(enemy.position[0] - g.position[0])
-                    + abs(enemy.position[1] - g.position[1])) > 4
-            )
-            options.append({'pos': g.position, 'score': -d + 20.0 + guard_safety})
-
-        d_base = abs(BASE_POSITION[0] - px) + abs(BASE_POSITION[1] - py)
-        options.append({'pos': BASE_POSITION, 'score': -d_base + 10.0})
-
-        for opt in options:
-            ox, oy = opt['pos']
-            for enemy in visible_enemies:
-                enemy_dist = abs(enemy.position[0] - ox) + abs(enemy.position[1] - oy)
-                opt['score'] -= max(0.0, 10.0 - enemy_dist) * 5.0
-
-        if options:
-            best = max(options, key=lambda o: o['score'])
-            self.current_target = best['pos']
-            return self._astar(best['pos'])
-
-        return []
-
-    def execute_build_tower(self):
-        """
-        Selecciona la mejor celda libre para construir una torre.
-        Nunca construye si es el último recolector vivo.
-        """
-        if self.build_target is None:
-            cell = self._select_build_cell()
-            if cell is None:
-                return []
-            self.build_target = cell
-
-        self.current_target = self.build_target
-
-        if self.position == self.build_target:
-            self.wants_to_build = True
-            return []
-
-        return self._astar(self.build_target)
-
-    def _select_build_cell(self):
-        """
-        Devuelve la mejor celda explorada vacía para colocar una torre.
+        Mejor celda para construir una torre: maximiza cobertura de riesgo
+        positivo, recursos y frontera inexplorada en radio 4.
         """
         px, py = self.position
         best_cell  = None
@@ -504,112 +204,414 @@ class Collector:
             for y in range(MAP_HEIGHT):
                 if not self.known_map[x][y].get('explored', False):
                     continue
-                if self.known_map[x][y]['last_known_type'] not in ('empty', 'resource'):
+                ctype = self.known_map[x][y]['last_known_type']
+                if ctype not in ('empty', 'resource'):
                     continue
 
-                risk = self.risk_map[x][y]
+                # Riesgo positivo en radio: torres son más útiles donde hay amenaza
+                risk_coverage = 0.0
+                resource_coverage = 0
+                frontier_coverage = 0
+                tower_redundancy  = 0
 
-                resource_proximity = sum(
-                    max(0.0, 5.0 - (abs(r['position'][0] - x) + abs(r['position'][1] - y)))
-                    for r in self.discovered_resources
-                )
+                for ddx in range(-4, 5):
+                    for ddy in range(-4, 5):
+                        if abs(ddx) + abs(ddy) > 4:
+                            continue
+                        nx2, ny2 = x + ddx, y + ddy
+                        if not (0 <= nx2 < MAP_WIDTH and 0 <= ny2 < MAP_HEIGHT):
+                            continue
+                        risk_coverage += max(0.0, self.risk_map[nx2][ny2])
+                        if self.known_map[nx2][ny2].get('last_known_type') == 'resource':
+                            resource_coverage += 1
+                        if not self.known_map[nx2][ny2].get('explored', False):
+                            frontier_coverage += 1
+                        if self.known_map[nx2][ny2].get('last_known_type') == 'tower':
+                            tower_redundancy += 1
 
-                redundancy = sum(
-                    1 for tx in range(max(0, x - 4), min(MAP_WIDTH, x + 5))
-                    for ty in range(max(0, y - 4), min(MAP_HEIGHT, y + 5))
-                    if self.known_map[tx][ty].get('explored', False)
-                    and self.known_map[tx][ty]['last_known_type'] == 'tower'
-                )
-
-                dist = abs(x - px) + abs(y - py)
-                score = risk * 10.0 + resource_proximity - redundancy * 15.0 - dist * 0.2
+                dist  = abs(x - px) + abs(y - py)
+                score = (risk_coverage * 3.0
+                         + resource_coverage * 2.0
+                         + frontier_coverage * 0.5
+                         - tower_redundancy * 15.0
+                         - dist * 0.2)
                 if score > best_score:
                     best_score = score
                     best_cell  = (x, y)
 
         return best_cell
 
+    def _find_best_explore_cell(self, all_collectors, all_guards):
+        """
+        Mejor celda frontera a explorar.
+        Criterios:
+          + Celdas desconocidas alrededor (más = mejor)
+          - Distancia al recolector (menos = mejor)
+          + Distancia mínima a otros aliados (más = mejor, evita duplicar cobertura)
+          - Riesgo en la celda (más negativo = más seguro = mejor)
+        """
+        px, py = self.position
+
+        # Aliados vivos (para penalizar celdas que ya están cubiertas)
+        alive_allies = (
+            [c for c in all_collectors if c.is_alive and c is not self]
+            + [g for g in all_guards if g.is_alive]
+        )
+
+        best_cell  = None
+        best_score = float('-inf')
+
+        for x in range(MAP_WIDTH):
+            for y in range(MAP_HEIGHT):
+                if self.known_map[x][y].get('explored', False):
+                    continue
+                # Solo fronteras (adyacente a explorado)
+                is_frontier = any(
+                    0 <= x + ddx < MAP_WIDTH and 0 <= y + ddy < MAP_HEIGHT
+                    and self.known_map[x + ddx][y + ddy].get('explored', False)
+                    for ddx, ddy in [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                )
+                if not is_frontier:
+                    continue
+
+                # Celdas desconocidas en radio 4
+                unknown_count = sum(
+                    1
+                    for ddx in range(-4, 5) for ddy in range(-4, 5)
+                    if abs(ddx) + abs(ddy) <= 4
+                    and 0 <= x + ddx < MAP_WIDTH and 0 <= y + ddy < MAP_HEIGHT
+                    and not self.known_map[x + ddx][y + ddy].get('explored', False)
+                )
+
+                dist_to_me = abs(x - px) + abs(y - py)
+
+                # Distancia al aliado más cercano (más lejos = más valioso explorar ahí)
+                if alive_allies:
+                    min_ally_dist = min(
+                        abs(x - a.position[0]) + abs(y - a.position[1])
+                        for a in alive_allies
+                    )
+                else:
+                    min_ally_dist = MAP_WIDTH + MAP_HEIGHT
+
+                risk = self.risk_map[x][y]
+
+                score = (unknown_count * 5.0
+                         - dist_to_me * 0.5
+                         + min_ally_dist * 0.3
+                         - risk * 2.0)   # más negativo = más seguro = mejor
+
+                if score > best_score:
+                    best_score = score
+                    best_cell  = (x, y)
+
+        return best_cell
+
+    def _find_closest_resource(self):
+        """Recurso conocido más cercano al recolector, o None."""
+        if not self.discovered_resources:
+            return None
+        px, py = self.position
+        return min(
+            self.discovered_resources,
+            key=lambda r: abs(r['position'][0] - px) + abs(r['position'][1] - py)
+        )
+
+    # ===================================================================
+    # ESTADO RL (5 variables)
+    # ===================================================================
+
+    def build_state(self, visible_enemies, visible_allies,
+                    best_build_cell, best_explore_cell, best_resource):
+        """
+        Tupla discreta de 5 variables para Q-learning:
+          (build_dist, explore_dist, resource_dist, can_carry, hunter_near)
+
+        build_dist:    0=sin kit, 1=kit cerca(<=5), 2=kit lejos(>5)
+        explore_dist:  0=sin frontera, 1=cerca(<=8), 2=lejos(>8)
+        resource_dist: 0=sin recursos, 1=cerca(<=5), 2=lejos(>5)
+        can_carry:     0=lleno, 1=puede cargar más
+        hunter_near:   0=no, 1=sí
+        """
+        px, py = self.position
+
+        # Build
+        if not self.has_build_kit or best_build_cell is None:
+            build_dist = 0
+        else:
+            d = abs(best_build_cell[0] - px) + abs(best_build_cell[1] - py)
+            build_dist = 1 if d <= _DIST_BUILD_CLOSE else 2
+
+        # Explore
+        if best_explore_cell is None:
+            explore_dist = 0
+        else:
+            d = abs(best_explore_cell[0] - px) + abs(best_explore_cell[1] - py)
+            explore_dist = 1 if d <= _DIST_EXPLORE_CLOSE else 2
+
+        # Resource
+        if best_resource is None:
+            resource_dist = 0
+        else:
+            d = abs(best_resource['position'][0] - px) + abs(best_resource['position'][1] - py)
+            resource_dist = 1 if d <= _DIST_RESOURCE_CLOSE else 2
+
+        can_carry   = 0 if self.carrying_resources >= self.carrying_capacity else 1
+        hunter_near = 1 if visible_enemies else 0
+
+        return (build_dist, explore_dist, resource_dist, can_carry, hunter_near)
+
+    # ===================================================================
+    # HEURISTIC BIASES
+    # ===================================================================
+
+    def calculate_heuristic_biases(self, state, visible_allies):
+        """
+        Sesgos heurísticos sobre Q-values según el estado actual.
+        """
+        build_dist, explore_dist, resource_dist, can_carry, hunter_near = state
+
+        biases = {a: 0.0 for a in ACTIONS}
+
+        # HUIR: domina cuando hay cazador visible
+        if hunter_near:
+            biases['FLEE'] += HEUR_FLEE_HUNTER
+
+        # IR_A_BASE: domina cuando el inventario está lleno
+        if can_carry == 0:
+            biases['RETURN_TO_BASE'] += HEUR_RETURN_FULL
+
+        # CONSTRUIR: se promueve si tiene kit
+        if build_dist > 0:
+            biases['BUILD_TOWER'] += HEUR_BUILD_HAS_KIT
+
+        # IR_POR_RECURSO: se promueve si hay recursos conocidos y puede cargar
+        if resource_dist > 0 and can_carry == 1:
+            biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_BASE
+
+        return biases
+
+    # ===================================================================
+    # RECOMPENSAS POR TICK
+    # ===================================================================
+
+    def _compute_step_reward(self, action, visible_allies, hunter_near,
+                              best_explore_cell, best_resource, best_build_cell):
+        """
+        Calcula recompensa de paso basada en el estado actual y la acción tomada.
+        """
+        reward = 0.0
+        px, py = self.position
+
+        # Celdas que este recolector descubrió en su perceive() de este tick
+        if self._cells_explored_this_tick > 0:
+            reward += REWARD_CELL_EXPLORED * self._cells_explored_this_tick
+
+        guard_near = any(a.__class__.__name__ == 'Guard' for a in visible_allies)
+        tower_near = any(a.__class__.__name__ == 'Tower' for a in visible_allies)
+
+        # Presencia de aliados cerca
+        if guard_near:
+            reward += REWARD_GUARD_NEARBY
+        if tower_near:
+            reward += REWARD_TOWER_NEARBY
+
+        # Cazador visible: penaliza cada tick
+        if hunter_near:
+            reward += REWARD_HUNTER_NEAR
+
+        # --- Recompensas por acción ---
+        if action == 'FLEE':
+            if hunter_near:
+                reward += REWARD_FLEE_HUNTER
+            else:
+                reward += REWARD_FLEE_NO_HUNTER
+
+        elif action == 'RETURN_TO_BASE':
+            if self.carrying_resources > 0:
+                reward += REWARD_GOING_TO_BASE_RES
+                bx, by = BASE_POSITION
+                curr_dist_base = abs(bx - px) + abs(by - py)
+                if self._prev_dist_base is not None and curr_dist_base < self._prev_dist_base:
+                    reward += REWARD_APPROACH_BASE
+            else:
+                reward += REWARD_BASE_NO_RES
+            if hunter_near:
+                reward += REWARD_BAD_ACTION_HUNTER
+
+        elif action == 'GO_TO_RESOURCE':
+            if self.carrying_resources >= self.carrying_capacity:
+                reward += REWARD_RESOURCE_FULL
+            elif best_resource is not None and self._prev_dist_resource is not None:
+                rx, ry = best_resource['position']
+                curr_dist = abs(rx - px) + abs(ry - py)
+                if curr_dist < self._prev_dist_resource:
+                    reward += REWARD_APPROACH_RESOURCE
+            if hunter_near:
+                reward += REWARD_BAD_ACTION_HUNTER
+
+        elif action == 'EXPLORE':
+            if self.has_build_kit:
+                reward += REWARD_EXPLORE_WITH_KIT
+            if best_explore_cell is not None and self._prev_dist_explore is not None:
+                ex, ey = best_explore_cell
+                curr_dist = abs(ex - px) + abs(ey - py)
+                if curr_dist < self._prev_dist_explore:
+                    reward += REWARD_APPROACH_EXPLORE
+            if hunter_near:
+                reward += REWARD_BAD_ACTION_HUNTER
+
+        elif action == 'BUILD_TOWER':
+            if not self.has_build_kit:
+                reward += REWARD_BUILD_NO_KIT
+            elif best_build_cell is not None and self._prev_dist_build is not None:
+                bx2, by2 = best_build_cell
+                curr_dist = abs(bx2 - px) + abs(by2 - py)
+                if curr_dist < self._prev_dist_build:
+                    reward += REWARD_APPROACH_BUILD
+
+        return reward
+
+    def _update_prev_distances(self, best_explore_cell, best_resource, best_build_cell):
+        """Guarda distancias actuales para el siguiente tick."""
+        px, py = self.position
+        if best_explore_cell is not None:
+            ex, ey = best_explore_cell
+            self._prev_dist_explore = abs(ex - px) + abs(ey - py)
+        else:
+            self._prev_dist_explore = None
+
+        if best_resource is not None:
+            rx, ry = best_resource['position']
+            self._prev_dist_resource = abs(rx - px) + abs(ry - py)
+        else:
+            self._prev_dist_resource = None
+
+        if best_build_cell is not None and self.has_build_kit:
+            bx2, by2 = best_build_cell
+            self._prev_dist_build = abs(bx2 - px) + abs(by2 - py)
+        else:
+            self._prev_dist_build = None
+
+        bx, by = BASE_POSITION
+        self._prev_dist_base = abs(bx - px) + abs(by - py)
+
+    # ===================================================================
+    # EJECUCIÓN DE ACCIONES
+    # ===================================================================
+
+    def execute_explore(self, best_explore_cell):
+        if best_explore_cell is None:
+            return []
+        self.current_target = best_explore_cell
+        return self._astar(best_explore_cell)
+
+    def execute_go_to_resource(self, best_resource, all_collectors):
+        """Va al recurso más cercano conocido."""
+        if best_resource is None:
+            # Sin recursos: explorar
+            return []
+        self.current_target = best_resource['position']
+        return self._astar(best_resource['position'])
+
+    def execute_return_to_base(self):
+        self.current_target = BASE_POSITION
+        return self._astar(BASE_POSITION)
+
+    def execute_flee(self, visible_enemies, visible_allies):
+        """Huye hacia la opción más segura: torre > guardia > base."""
+        px, py = self.position
+        options = []
+
+        for a in visible_allies:
+            if a.__class__.__name__ == 'Tower':
+                d = abs(a.position[0] - px) + abs(a.position[1] - py)
+                options.append({'pos': a.position, 'score': 30.0 - d})
+            elif a.__class__.__name__ == 'Guard':
+                d = abs(a.position[0] - px) + abs(a.position[1] - py)
+                options.append({'pos': a.position, 'score': 20.0 - d})
+
+        d_base = abs(BASE_POSITION[0] - px) + abs(BASE_POSITION[1] - py)
+        options.append({'pos': BASE_POSITION, 'score': 10.0 - d_base})
+
+        # Penalizar opciones cercanas al enemigo
+        for opt in options:
+            ox, oy = opt['pos']
+            for e in visible_enemies:
+                ed = abs(e.position[0] - ox) + abs(e.position[1] - oy)
+                opt['score'] -= max(0.0, (8.0 - ed) * 2.0)
+
+        best = max(options, key=lambda o: o['score'])
+        self.current_target = best['pos']
+        return self._astar(best['pos'])
+
+    def execute_build_tower(self, best_build_cell):
+        """Se mueve hacia la mejor celda de construcción."""
+        if best_build_cell is None:
+            return []
+
+        if self.build_target is None:
+            self.build_target = best_build_cell
+
+        self.current_target = self.build_target
+
+        if self.position == self.build_target:
+            self.wants_to_build = True
+            return []
+
+        return self._astar(self.build_target)
+
     # ===================================================================
     # RECOLECCIÓN Y DEPÓSITO
     # ===================================================================
 
     def collect_resource(self, cell):
-        """
-        Recoge recursos de la celda actual.
-        Retorna cantidad recolectada.
-        """
         if cell.resource_amount <= 0:
             return 0
         free      = self.carrying_capacity - self.carrying_resources
         collected = min(COLLECT_RATE, cell.resource_amount, free)
-        self.carrying_resources  += collected
-        cell.resource_amount     -= collected
+        self.carrying_resources += collected
+        cell.resource_amount    -= collected
         return collected
 
     def deposit_resources(self):
-        """Deposita todos los recursos en la base. Retorna cantidad depositada."""
         amount = self.carrying_resources
         self.carrying_resources = 0
         return amount
 
     def receive_build_kit(self):
-        """El environment entrega un build kit al recolector."""
         self.has_build_kit = True
 
     # ===================================================================
-    # RECOMPENSAS
+    # RECOMPENSAS DE EVENTO
     # ===================================================================
 
     def get_reward(self, event):
-        """Mapea un evento a su recompensa según constants."""
         rewards = {
-            'deliver_resources':  REWARD_DELIVER_RESOURCES,
-            'collect':            REWARD_COLLECT,
-            'explore':            REWARD_EXPLORE,
-            'build_tower':        REWARD_BUILD_TOWER,
-            'danger_zone':        REWARD_DANGER_ZONE,
-            'lose_resources':     REWARD_LOSE_RESOURCES,
-            'die':                REWARD_COLLECTOR_DIE,
-            'idle':               REWARD_IDLE,
-            'return_empty':       REWARD_RETURN_EMPTY,
-            'approach_resource':  REWARD_APPROACH_RESOURCE,
-            'stagnation':         REWARD_STAGNATION,
-            'explore_with_escort': REWARD_EXPLORE_WITH_ESCORT,
+            'collect':           REWARD_COLLECT,
+            'deliver_resources': REWARD_DELIVER_RESOURCES,
+            'build_tower':       REWARD_BUILD_TOWER,
+            'die':               REWARD_COLLECTOR_DIE,
         }
         return rewards.get(event, 0.0)
 
     def receive_reward(self, event):
-        """
-        Acumula la recompensa del evento para aplicarla en el siguiente decide(),
-        donde el next_state real ya estará disponible.
-        """
         self._pending_reward += self.get_reward(event)
-
-    def _compute_step_reward(self, action, guard_near):
-        """Calcula recompensa de paso basada en tracking de progreso."""
-        reward = 0.0
-        if action == 'RETURN_TO_BASE' and self.carrying_resources == 0:
-            reward += REWARD_RETURN_EMPTY
-        if self.ticks_since_progress > STAGNATION_THRESHOLD:
-            reward += REWARD_STAGNATION
-        return reward
 
     # ===================================================================
     # MUERTE
     # ===================================================================
 
     def die(self):
-        """Muerte permanente. Pierde recursos y build kit."""
         self.is_alive           = False
         self.carrying_resources = 0
         self.has_build_kit      = False
 
     # ===================================================================
-    # PATHFINDING INTERNO
+    # PATHFINDING
     # ===================================================================
 
     def _astar(self, goal):
-        """Wrapper de find_path con known_map (fog of war real)."""
         return find_path(
             self.position,
             goal,
@@ -620,122 +622,58 @@ class Collector:
 
     def _cost_function(self, _, neighbor_pos):
         """
-        cost = 1.0 + risk + cercanía_a_enemigos - cercanía_a_torres/guardias
+        Costo = 1 + risk_map[x][y].
+        Valores negativos (cerca de guardias/torres) = rutas más baratas.
+        Valores positivos (cerca de cazadores) = rutas más caras.
         """
-        nx, ny   = neighbor_pos
-        explored = self.known_map[nx][ny].get('explored', False)
-        cost     = 1.0 + (self.risk_map[nx][ny] if explored else RISK_UNEXPLORED)
-
-        for entry in self.last_seen_enemies:
-            ep   = entry['position']
-            dist = abs(ep[0] - nx) + abs(ep[1] - ny)
-            if dist <= 3:
-                cost += max(0.0, (3 - dist) * 1.5)
-
+        nx, ny = neighbor_pos
+        cost = 1.0 + self.risk_map[nx][ny]
         return max(0.1, cost)
-
-    # ===================================================================
-    # UTILIDADES
-    # ===================================================================
-
-    def _get_game_phase(self):
-        """Determina la fase del juego según cobertura del mapa."""
-        explored_count = self.shared_data.get('explored_count', 0)
-        explored_pct   = explored_count / (MAP_WIDTH * MAP_HEIGHT)
-        if explored_pct < PHASE_EARLY_THRESHOLD:
-            return "EARLY"
-        elif explored_pct < PHASE_MID_THRESHOLD:
-            return "MID"
-        return "LATE"
-
-    def _count_known_towers(self):
-        """Cuenta torres conocidas en el mapa."""
-        return sum(
-            1 for x in range(MAP_WIDTH) for y in range(MAP_HEIGHT)
-            if self.known_map[x][y].get('last_known_type') == 'tower'
-        )
-
-    def _update_progress_tracking(self, action):
-        """Actualiza contadores de estancamiento."""
-        # Streak de acción repetida
-        if action == self.current_action:
-            self.current_action_streak += 1
-        else:
-            self.current_action_streak = 0
-
-        # Detectar progreso real (recursos, exploración, o acercarse a la base)
-        explored_count = self.shared_data.get('explored_count', 0)
-        bx, by = BASE_POSITION
-        px, py = self.position
-        dist_to_base = abs(px - bx) + abs(py - by)
-        approaching_base = (
-            self.carrying_resources > 0
-            and dist_to_base < self._prev_dist_to_base
-        )
-        has_progress = (
-            self.carrying_resources != self._prev_resources_carried
-            or explored_count > self._prev_explored_count + 2
-            or approaching_base
-        )
-        if has_progress:
-            self.ticks_since_progress        = 0
-            self._prev_resources_carried     = self.carrying_resources
-            self._prev_explored_count        = explored_count
-        else:
-            self.ticks_since_progress += 1
-        self._prev_dist_to_base = dist_to_base
 
     # ===================================================================
     # TOMA DE DECISIÓN
     # ===================================================================
 
-    def decide(self, grid, current_tick, all_collectors):
+    def decide(self, grid, current_tick, all_collectors, all_guards=None):
         """
         Ciclo completo por tick:
-        percibir → estado → biases → acción (ε-greedy) → ejecutar → path
+        percibir → calcular objetivos → construir estado → biases → acción
         """
         self._last_grid = grid
         if not self.is_alive:
             return
 
+        if all_guards is None:
+            all_guards = []
+
         visible_enemies, _, visible_allies = self.perceive(grid, current_tick)
-        state = self.build_state(visible_enemies, visible_allies)
 
-        # Construir game_context para heurísticas
-        explored_count  = self.shared_data.get('explored_count', 0)
-        explored_pct    = explored_count / (MAP_WIDTH * MAP_HEIGHT)
-        tower_count     = self._count_known_towers()
-        num_alive_colls = sum(1 for c in all_collectors if c.is_alive)
-        guard_near      = state[4]
-        phase           = self._get_game_phase()
+        # Pre-computar objetivos (usados tanto para estado como para ejecución)
+        best_build_cell   = self._find_best_build_cell() if self.has_build_kit else None
+        best_explore_cell = self._find_best_explore_cell(all_collectors, all_guards)
+        best_resource     = self._find_closest_resource()
 
-        px_self, py_self = self.position
-        min_enemy_dist = min(
-            (abs(e.position[0] - px_self) + abs(e.position[1] - py_self)
-             for e in visible_enemies),
-            default=999
+        # Regla directa: si está en la mejor celda de construcción, señalizar
+        self.wants_to_build = False
+        if self.has_build_kit and best_build_cell is not None and self.position == best_build_cell:
+            self.wants_to_build = True
+            # También actualizar build_target para que el environment lo valide
+            self.build_target = best_build_cell
+
+        state = self.build_state(
+            visible_enemies, visible_allies,
+            best_build_cell, best_explore_cell, best_resource
         )
 
-        game_context = {
-            'carrying_resources':  self.carrying_resources,
-            'carrying_capacity':   self.carrying_capacity,
-            'explored_percent':    explored_pct,
-            'tower_count':         tower_count,
-            'num_alive_collectors': num_alive_colls,
-            'current_action_streak': self.current_action_streak,
-            'ticks_since_progress':  self.ticks_since_progress,
-            'guard_near':           guard_near,
-            'min_enemy_dist':       min_enemy_dist,
-        }
-
-        biases = self.calculate_heuristic_biases(state, phase, game_context)
-
-        # Actualizar tracking ANTES del Q-update (usa acción anterior)
-        self._update_progress_tracking(self.current_action)
+        hunter_near = state[4]
+        biases = self.calculate_heuristic_biases(state, visible_allies)
 
         # Q-update con transición anterior + recompensa de paso + eventos pendientes
         if self.prev_state is not None and self.prev_action is not None:
-            step_reward = self._compute_step_reward(self.prev_action, guard_near)
+            step_reward = self._compute_step_reward(
+                self.prev_action, visible_allies, hunter_near,
+                best_explore_cell, best_resource, best_build_cell
+            )
             step_reward += self._pending_reward
             self._pending_reward = 0.0
             self.q_learning.update(self.prev_state, self.prev_action, step_reward, state)
@@ -745,18 +683,20 @@ class Collector:
         self.prev_state     = state
         self.prev_action    = action
 
-        self.wants_to_build = False
+        # Guardar distancias para siguiente tick
+        self._update_prev_distances(best_explore_cell, best_resource, best_build_cell)
 
+        # Ejecutar acción
         if action == 'EXPLORE':
-            self.current_path = self.execute_explore(all_collectors)
+            self.current_path = self.execute_explore(best_explore_cell)
         elif action == 'GO_TO_RESOURCE':
-            self.current_path = self.execute_go_to_resource(all_collectors)
+            self.current_path = self.execute_go_to_resource(best_resource, all_collectors)
         elif action == 'RETURN_TO_BASE':
             self.current_path = self.execute_return_to_base()
         elif action == 'FLEE':
             self.current_path = self.execute_flee(visible_enemies, visible_allies)
         elif action == 'BUILD_TOWER':
-            self.current_path = self.execute_build_tower()
+            self.current_path = self.execute_build_tower(best_build_cell)
 
         if self.current_path:
             self.next_position = self.current_path.pop(0)

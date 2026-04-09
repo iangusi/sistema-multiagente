@@ -9,9 +9,8 @@ from utils.constants import (
     BUILD_KIT_COST,
     NUM_COLLECTORS, NUM_GUARDS, NUM_HUNTERS,
     HUNTER_MIN_SPAWN_DISTANCE,
-    RISK_UNEXPLORED, RISK_DECAY, RISK_DIFFUSION,
-    RISK_ENEMY_WEIGHT, RISK_TOWER_REDUCTION,
-    REWARD_COLLECTOR_DIES_WHILE_ADJACENT,
+    RISK_GUARD, RISK_TOWER, RISK_COLLECTOR, RISK_HUNTER,
+    RISK_PROPAGATION_RANGE, RISK_MEMORY_TICKS, RISK_DECAY,
     QL_ALPHA, QL_GAMMA, QL_EPSILON, QL_EPSILON_DECAY, QL_EPSILON_MIN,
     MAX_TOWERS_PER_EXPLORATION,
     CELL_SIZE, SIDEBAR_WIDTH, WINDOW_WIDTH, WINDOW_HEIGHT, FPS,
@@ -28,9 +27,9 @@ from agents.tower import Tower
 from rl.q_learning import QLearning
 from evolution.genetic_system import random_spawn_position
 
-# Acciones de RL por tipo de agente (SCOUT añadido al guardia)
+# Acciones de RL por tipo de agente
 _COLLECTOR_ACTIONS = ['EXPLORE', 'GO_TO_RESOURCE', 'RETURN_TO_BASE', 'FLEE', 'BUILD_TOWER']
-_GUARD_ACTIONS     = ['PATROL', 'ESCORT', 'ATTACK', 'INTERCEPT', 'DEFEND_ZONE', 'INVESTIGATE', 'SCOUT']
+_GUARD_ACTIONS     = ['EXPLORE', 'ATTACK', 'DEFEND', 'FLEE']
 
 
 # ---------------------------------------------------------------------------
@@ -114,15 +113,9 @@ class Environment:
         self.last_seen_enemies    = []
 
         self.risk_map = [
-            [RISK_UNEXPLORED for _ in range(MAP_HEIGHT)]
+            [0.0 for _ in range(MAP_HEIGHT)]
             for _ in range(MAP_WIDTH)
         ]
-        # Reducir riesgo inicial en zona de base
-        for dx in range(-3, 4):
-            for dy in range(-3, 4):
-                nx, ny = bx + dx, by + dy
-                if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT:
-                    self.risk_map[nx][ny] = 0.0
 
         self.shared_data = {
             'known_map':           self.known_map,
@@ -229,7 +222,7 @@ class Environment:
         # 4. DECISIONES — cada agente calcula su siguiente posición
         intended_moves: dict = {}
         for c in alive_collectors:
-            new_pos = c.decide(self, self.current_tick, alive_collectors)
+            new_pos = c.decide(self, self.current_tick, alive_collectors, alive_guards)
             intended_moves[c] = new_pos if new_pos is not None else c.position
         for g in alive_guards:
             # Se pasa self.collectors (todos, vivos y muertos) para que el guardia
@@ -265,12 +258,6 @@ class Environment:
                 if amount > 0:
                     c.receive_reward('collect')
                     self.last_event = f'Recolector recoge {amount} recursos'
-                    # Notificar guardias cercanos: su protección fue efectiva
-                    for g in self.guards:
-                        if g.is_alive:
-                            dist_g = abs(g.position[0] - cx) + abs(g.position[1] - cy)
-                            if dist_g <= g.vision_range:
-                                g.receive_reward('protect_collector')
                     # Marcar como explorada la nueva posición de recurso
                     self.known_map[cx][cy]['explored'] = True
                     self.known_map[cx][cy]['last_known_type'] = 'resource'
@@ -448,18 +435,8 @@ class Environment:
             self.cells[px][py].agents.remove(agent)
 
         if atype == 'Collector':
-            if agent.carrying_resources > 0:
-                agent.receive_reward('lose_resources')
             agent.receive_reward('die')
             agent.die()
-            # Notificar a guardias cercanos — castigo escalado por proximidad
-            for g in self.guards:
-                if g.is_alive:
-                    dist = (abs(g.position[0] - px) + abs(g.position[1] - py))
-                    if dist <= 2:
-                        g.receive_reward('collector_dies_while_adjacent')
-                    elif dist <= g.vision_range:
-                        g.receive_reward('collector_dies_nearby')
         elif atype == 'Guard':
             agent.receive_reward('die')
             agent.die()
@@ -472,64 +449,55 @@ class Environment:
 
     def _update_risk_map(self):
         """
-        Actualiza el mapa de riesgo:
-        1. Decaimiento temporal: *= RISK_DECAY
-        2. Difusión espacial desde vecinos
-        3. Aumentar riesgo en zonas con enemigos recientes
-        4. Reducir riesgo cerca de torres
+        Actualiza el mapa de riesgo con decaimiento gradual hacia cero.
+
+        Algoritmo por tick:
+          1. Decaimiento: risk_map[x][y] *= RISK_DECAY  (0.5^4 ≈ 0 en 4 ticks)
+          2. Sumar contribuciones de las fuentes actuales propagadas en radio R.
+
+        Valores base en la casilla del agente:
+          Guardia: -1, Torre: -3, Recolector: +0.5, Cazador: +2
+
+        Los cazadores se consideran fuente solo si fueron vistos en los últimos
+        RISK_MEMORY_TICKS ticks; sin ese avistamiento, su contribución no se suma
+        y la celda decae sola hacia cero.
         """
-        # 1. Decaimiento
+        R = RISK_PROPAGATION_RANGE
+
+        # 1. Decaimiento multiplicativo → tiende a 0 en ~4 ticks sin fuente
         for x in range(MAP_WIDTH):
             for y in range(MAP_HEIGHT):
                 self.risk_map[x][y] *= RISK_DECAY
 
-        # 2. Difusión (calcular sobre copia para no propagar en cascada)
-        diffusion = [
-            [0.0 for _ in range(MAP_HEIGHT)]
-            for _ in range(MAP_WIDTH)
-        ]
-        for x in range(MAP_WIDTH):
-            for y in range(MAP_HEIGHT):
-                neighbors_sum = 0.0
-                for dx, dy in [(1, 0), (-1, 0), (0, 1), (0, -1)]:
-                    nx, ny = x + dx, y + dy
-                    if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT:
-                        neighbors_sum += self.risk_map[nx][ny]
-                diffusion[x][y] = neighbors_sum * RISK_DIFFUSION
-        for x in range(MAP_WIDTH):
-            for y in range(MAP_HEIGHT):
-                self.risk_map[x][y] += diffusion[x][y]
+        # 2. Recopilar fuentes activas
+        sources = []
 
-        # 3. Aumentar riesgo cerca de enemigos recientemente vistos
-        for entry in self.last_seen_enemies:
-            ex, ey = entry['position']
-            # Sólo considerar avistamientos recientes
-            if self.current_tick - entry['tick'] > 10:
-                continue
-            for dx in range(-3, 4):
-                for dy in range(-3, 4):
-                    nx, ny = ex + dx, ey + dy
-                    if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT:
-                        decay = max(0.0, 1.0 - (abs(dx) + abs(dy)) / 4.0)
-                        self.risk_map[nx][ny] += RISK_ENEMY_WEIGHT * decay
+        for guard in self.guards:
+            if guard.is_alive:
+                sources.append((guard.position[0], guard.position[1], RISK_GUARD))
 
-        # 4. Reducir riesgo en zona de torres aliadas
         for tower in self.towers:
-            tx, ty = tower.position
-            for dx in range(-tower.attack_range, tower.attack_range + 1):
-                for dy in range(-tower.attack_range, tower.attack_range + 1):
-                    if abs(dx) + abs(dy) <= tower.attack_range:
-                        nx, ny = tx + dx, ty + dy
-                        if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT:
-                            self.risk_map[nx][ny] = max(
-                                0.0,
-                                self.risk_map[nx][ny] - RISK_TOWER_REDUCTION
-                            )
+            sources.append((tower.position[0], tower.position[1], RISK_TOWER))
 
-        # Clamp
-        for x in range(MAP_WIDTH):
-            for y in range(MAP_HEIGHT):
-                self.risk_map[x][y] = max(0.0, min(5.0, self.risk_map[x][y]))
+        for collector in self.collectors:
+            if collector.is_alive:
+                sources.append((collector.position[0], collector.position[1], RISK_COLLECTOR))
+
+        for entry in self.last_seen_enemies:
+            if self.current_tick - entry['tick'] <= RISK_MEMORY_TICKS:
+                sources.append((entry['position'][0], entry['position'][1], RISK_HUNTER))
+
+        # 3. Propagar cada fuente en radio R con decaimiento lineal de distancia
+        for sx, sy, value in sources:
+            for dx in range(-R, R + 1):
+                for dy in range(-R, R + 1):
+                    dist = abs(dx) + abs(dy)
+                    if dist > R:
+                        continue
+                    nx, ny = sx + dx, sy + dy
+                    if 0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT:
+                        factor = 1.0 - dist / (R + 1)
+                        self.risk_map[nx][ny] += value * factor
 
     # =====================================================================
     # BUILD KITS

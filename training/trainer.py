@@ -30,8 +30,7 @@ class Trainer:
             epsilon_min=QL_EPSILON_MIN,
         )
         self.guard_ql = QLearning(
-            actions=['PATROL', 'ESCORT', 'ATTACK', 'INTERCEPT',
-                     'DEFEND_ZONE', 'INVESTIGATE', 'SCOUT'],
+            actions=['EXPLORE', 'ATTACK', 'DEFEND', 'FLEE'],
             alpha=QL_ALPHA, gamma=QL_GAMMA,
             epsilon=QL_EPSILON, epsilon_decay=QL_EPSILON_DECAY,
             epsilon_min=QL_EPSILON_MIN,
