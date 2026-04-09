@@ -36,7 +36,7 @@ NUM_HUNTERS = 10
 # ============================================================
 COLLECTOR_HP = 2
 COLLECTOR_SPEED = 1
-COLLECTOR_VISION = 3
+COLLECTOR_VISION = 4
 COLLECTOR_CARRY_CAPACITY = 10
 COLLECTOR_ATTACK_RANGE = 0  # no ataca
 COLLECTOR_ATTACK_COOLDOWN = 0
@@ -46,7 +46,7 @@ COLLECTOR_ATTACK_COOLDOWN = 0
 # ============================================================
 GUARD_HP = 1
 GUARD_SPEED = 1
-GUARD_VISION = 3
+GUARD_VISION = 4
 GUARD_ATTACK_RANGE = 2
 GUARD_ATTACK_COOLDOWN = 2
 GUARD_DAMAGE = 1
@@ -56,11 +56,11 @@ GUARD_DAMAGE = 1
 # ============================================================
 HUNTER_HP = 1
 HUNTER_SPEED = 1
-HUNTER_VISION = 5
+HUNTER_VISION = 8
 HUNTER_ATTACK_RANGE = 1
 HUNTER_ATTACK_COOLDOWN = 1
-HUNTER_DAMAGE = 9999  # siempre letal
-HUNTER_COMMUNICATION_RADIUS = 10
+HUNTER_DAMAGE = 1  # siempre letal
+HUNTER_COMMUNICATION_RADIUS = 12
 HUNTER_MEMORY_DURATION = 8  # ticks antes de olvidar
 
 # Progresión on-kill
@@ -79,7 +79,7 @@ HUNTER_MIN_SPAWN_DISTANCE = 15  # distancia mínima Manhattan desde la base al r
 TOWER_VISION = 4
 TOWER_ATTACK_RANGE = 4
 TOWER_ATTACK_COOLDOWN = 2
-TOWER_DAMAGE = 1
+TOWER_DAMAGE = 1.5
 
 # ============================================================
 # GENES (VALORES INICIALES PARA CAZADORES)
@@ -113,8 +113,8 @@ HEUR_GOTO_RESOURCE_BASE = 100   # recurso conocido → IR_POR_RECURSO
 # ============================================================
 # HEURÍSTICAS GUARDIA
 # ============================================================
-HEUR_GUARD_ATTACK = 200         # puede atacar → ATACAR domina
-HEUR_GUARD_FLEE_DANGER = 150    # en peligro → HUIR
+HEUR_GUARD_ATTACK = 150          # puede atacar → ATACAR
+HEUR_GUARD_FLEE_DANGER = 200     # en peligro → HUIR
 HEUR_GUARD_DEFEND_ALLY = 180     # aliado en peligro → DEFENDER
 HEUR_GUARD_EXPLORE_BASE = 120    # comportamiento base → EXPLORAR
 
@@ -133,21 +133,20 @@ QL_EPSILON_MIN = 0.04  # bajo para explotar la política aprendida
 REWARD_APPROACH_EXPLORE = 1       # acercarse a celda de exploración
 REWARD_CELL_EXPLORED = 1          # celda nueva explorada
 REWARD_APPROACH_RESOURCE = 1      # acercarse al recurso más cercano
-REWARD_COLLECT = 5                # recolectar recurso
+REWARD_COLLECT = 8                # recolectar recurso
 REWARD_GOING_TO_BASE_RES = 1      # ir a base cargando recursos
-REWARD_DELIVER_RESOURCES = 5      # depositar recursos en base
+REWARD_DELIVER_RESOURCES = 9      # depositar recursos en base
 REWARD_APPROACH_BUILD = 2         # acercarse a celda de construcción
 REWARD_BUILD_NO_KIT = -1          # acción CONSTRUIR sin tener kit
-REWARD_BUILD_TOWER = 5            # torre creada exitosamente
+REWARD_BUILD_TOWER = 10           # torre creada exitosamente
 REWARD_GUARD_NEARBY = 1           # guardia aliado visible
 REWARD_TOWER_NEARBY = 1           # torre aliada visible
-REWARD_FLEE_HUNTER = 5            # huir con cazador cerca
-REWARD_HUNTER_NEAR = -3           # cazador visible (penaliza estar en peligro)
-REWARD_COLLECTOR_DIE = -10        # muerte del recolector
+REWARD_FLEE_HUNTER = 15           # huir con cazador cerca
+REWARD_COLLECTOR_DIE = -20        # muerte del recolector
 REWARD_BASE_NO_RES = -1           # ir a base sin recursos
 REWARD_RESOURCE_FULL = -1         # ir a recurso estando lleno
 REWARD_EXPLORE_WITH_KIT = -1      # explorar teniendo kit de construcción
-REWARD_BAD_ACTION_HUNTER = -1     # explorar/recurso/base con cazador cerca
+REWARD_BAD_ACTION_HUNTER = -3     # explorar/recurso/base con cazador cerca
 REWARD_FLEE_NO_HUNTER = -1        # huir sin cazador cerca
 REWARD_APPROACH_BASE = 1          # acercarse a base cargando recursos
 
@@ -156,16 +155,16 @@ REWARD_APPROACH_BASE = 1          # acercarse a base cargando recursos
 # ============================================================
 REWARD_GUARD_CELL_EXPLORED = 1    # celda nueva explorada
 REWARD_GUARD_APPROACH_EXPLORE = 1 # acercarse a explorar sin aliado en peligro
-REWARD_GUARD_EXPLORE_DANGER = -1  # explorar cuando aliado corre peligro
-REWARD_KILL_HUNTER = 3            # eliminar cazador
-REWARD_KILL_HUNTER_DEFEND = 2    # bonus por matar cazador mientras aliado en peligro
+REWARD_GUARD_EXPLORE_DANGER = -5  # explorar cuando aliado corre peligro
+REWARD_KILL_HUNTER = 8            # eliminar cazador
+REWARD_KILL_HUNTER_DEFEND = 8     # bonus por matar cazador mientras aliado en peligro
 REWARD_GUARD_HUNTER_NO_DANGER = 1 # cazador cerca sin peligro propio
-REWARD_GUARD_APPROACH_HUNTER = 1  # acercarse a cazador pudiendo atacar
-REWARD_GUARD_HUNTER_IN_DANGER = -1 # cazador cerca con peligro propio
-REWARD_GUARD_FLEE_DANGER = 2      # huir estando en peligro
-REWARD_GUARD_FLEE_NO_ATTACK = 1   # huir sin poder atacar
-REWARD_GUARD_CANT_ATTACK = -2     # cazador cerca sin poder atacar
-REWARD_GUARD_APPROACH_ALLY = 1    # acercarse a aliado en peligro
+REWARD_GUARD_APPROACH_HUNTER = 5  # acercarse a cazador pudiendo atacar
+REWARD_GUARD_HUNTER_IN_DANGER = -2 # cazador cerca con peligro propio
+REWARD_GUARD_FLEE_DANGER = 5      # huir estando en peligro
+REWARD_GUARD_FLEE_NO_ATTACK = 5   # huir sin poder atacar
+REWARD_GUARD_CANT_ATTACK = -3     # cazador cerca sin poder atacar
+REWARD_GUARD_APPROACH_ALLY = 8    # acercarse a aliado en peligro
 REWARD_GUARD_DIE = -10            # muerte del guardia
 
 # ============================================================
@@ -178,6 +177,16 @@ TRAINING_EPISODES_PHASE_4 = 1000
 TRAINING_MAX_TICKS_PER_EPISODE = 3000
 TRAINING_EPSILON_RESET_FACTOR = 0.6  # reset moderado → menos choque al subir dificultad
 QTABLE_SAVE_PATH = "data/"
+
+# ============================================================
+# EXPLORACIÓN DE GUARDIAS
+# ============================================================
+GUARD_EXPLORE_MAX_RADIUS    = 8    # radio máximo (Manhattan) desde un recolector para elegir destino
+GUARD_EXPLORE_WEIGHT_EMPTY  = 1    # peso de recolector sin recursos
+GUARD_EXPLORE_WEIGHT_RES    = 2    # peso de recolector con recursos
+GUARD_EXPLORE_WEIGHT_KIT    = 3    # peso de recolector con kit de construcción
+GUARD_EXPLORE_COLLECTOR_W   = 3.0  # multiplicador global de cercanía a recolectores
+GUARD_EXPLORE_SPREAD_W      = 1.0  # multiplicador de lejanía a otros guardias
 
 # ============================================================
 # MAPA DE RIESGO

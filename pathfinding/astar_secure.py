@@ -85,7 +85,7 @@ def find_path(start, goal, grid, cost_function, known_map=None, visible_cells=No
     # Esto hace que prefiera rutas seguras aunque sean más largas
     open_heap = []
     h_start = _manhattan(start, goal)
-    heapq.heappush(open_heap, (h_start * 0, 0, start))
+    heapq.heappush(open_heap, (h_start * 0.3, 0, start))
 
     came_from = {start: None}
     g_score = {start: 0.0}

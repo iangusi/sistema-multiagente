@@ -23,7 +23,6 @@ from utils.constants import (
     REWARD_GUARD_NEARBY,
     REWARD_TOWER_NEARBY,
     REWARD_FLEE_HUNTER,
-    REWARD_HUNTER_NEAR,
     REWARD_COLLECTOR_DIE,
     REWARD_BASE_NO_RES,
     REWARD_RESOURCE_FULL,
@@ -214,27 +213,26 @@ class Collector:
                 frontier_coverage = 0
                 tower_redundancy  = 0
 
-                for ddx in range(-4, 5):
-                    for ddy in range(-4, 5):
-                        if abs(ddx) + abs(ddy) > 4:
-                            continue
+                for ddx in range(-7, 8):
+                    for ddy in range(-7, 8):
                         nx2, ny2 = x + ddx, y + ddy
                         if not (0 <= nx2 < MAP_WIDTH and 0 <= ny2 < MAP_HEIGHT):
                             continue
-                        risk_coverage += max(0.0, self.risk_map[nx2][ny2])
-                        if self.known_map[nx2][ny2].get('last_known_type') == 'resource':
-                            resource_coverage += 1
-                        if not self.known_map[nx2][ny2].get('explored', False):
-                            frontier_coverage += 1
                         if self.known_map[nx2][ny2].get('last_known_type') == 'tower':
                             tower_redundancy += 1
+                        if abs(ddx) + abs(ddy) <= 4:
+                            risk_coverage += max(0.0, self.risk_map[nx2][ny2])
+                            if self.known_map[nx2][ny2].get('last_known_type') == 'resource':
+                                resource_coverage += 1
+                            if not self.known_map[nx2][ny2].get('explored', False):
+                                frontier_coverage += 1
 
                 dist  = abs(x - px) + abs(y - py)
                 score = (risk_coverage * 3.0
-                         + resource_coverage * 2.0
-                         + frontier_coverage * 0.5
-                         - tower_redundancy * 15.0
-                         - dist * 0.2)
+                         + resource_coverage * 3.0
+                         + frontier_coverage * 1.0
+                         - tower_redundancy * 5.0
+                         - dist * 0.5)
                 if score > best_score:
                     best_score = score
                     best_cell  = (x, y)
@@ -298,8 +296,8 @@ class Collector:
 
                 score = (unknown_count * 5.0
                          - dist_to_me * 0.5
-                         + min_ally_dist * 0.3
-                         - risk * 2.0)   # más negativo = más seguro = mejor
+                         + min_ally_dist * 0.1
+                         - risk * 1.0)   # más negativo = más seguro = mejor
 
                 if score > best_score:
                     best_score = score
@@ -365,30 +363,27 @@ class Collector:
     # HEURISTIC BIASES
     # ===================================================================
 
-    def calculate_heuristic_biases(self, state, visible_allies):
+    def calculate_heuristic_biases(self, state):
         """
         Sesgos heurísticos sobre Q-values según el estado actual.
         """
         build_dist, explore_dist, resource_dist, can_carry, hunter_near = state
 
         biases = {a: 0.0 for a in ACTIONS}
-
+        '''
         # HUIR: domina cuando hay cazador visible
         if hunter_near:
             biases['FLEE'] += HEUR_FLEE_HUNTER
-
         # IR_A_BASE: domina cuando el inventario está lleno
-        if can_carry == 0:
+        elif can_carry == 0:
             biases['RETURN_TO_BASE'] += HEUR_RETURN_FULL
-
         # CONSTRUIR: se promueve si tiene kit
-        if build_dist > 0:
+        elif build_dist > 0:
             biases['BUILD_TOWER'] += HEUR_BUILD_HAS_KIT
-
         # IR_POR_RECURSO: se promueve si hay recursos conocidos y puede cargar
-        if resource_dist > 0 and can_carry == 1:
+        elif resource_dist > 0:
             biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_BASE
-
+        '''
         return biases
 
     # ===================================================================
@@ -415,10 +410,6 @@ class Collector:
             reward += REWARD_GUARD_NEARBY
         if tower_near:
             reward += REWARD_TOWER_NEARBY
-
-        # Cazador visible: penaliza cada tick
-        if hunter_near:
-            reward += REWARD_HUNTER_NEAR
 
         # --- Recompensas por acción ---
         if action == 'FLEE':
@@ -706,7 +697,7 @@ class Collector:
         )
 
         hunter_near = state[4]
-        biases = self.calculate_heuristic_biases(state, visible_allies)
+        biases = self.calculate_heuristic_biases(state)
 
         # Q-update con transición anterior + recompensa de paso + eventos pendientes
         if self.prev_state is not None and self.prev_action is not None:

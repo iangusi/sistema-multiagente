@@ -26,6 +26,12 @@ from utils.constants import (
     REWARD_GUARD_APPROACH_ALLY,
     REWARD_GUARD_DIE,
     RISK_UNEXPLORED,
+    GUARD_EXPLORE_MAX_RADIUS,
+    GUARD_EXPLORE_WEIGHT_EMPTY,
+    GUARD_EXPLORE_WEIGHT_RES,
+    GUARD_EXPLORE_WEIGHT_KIT,
+    GUARD_EXPLORE_COLLECTOR_W,
+    GUARD_EXPLORE_SPREAD_W,
 )
 from pathfinding.astar import find_path
 from pathfinding.astar_secure import find_path as find_path_secure
@@ -36,8 +42,8 @@ ACTIONS = ['EXPLORE', 'ATTACK', 'DEFEND', 'FLEE']
 # Radio para calcular "cazador cerca" de un aliado en la función de peligro
 _DANGER_RANGE = 4
 
-# Radio para considerar que un guardia protege a un recolector
-_GUARD_PROTECT_RANGE = 4
+# Radio para considerar que un guardia protege a un recolector (máximo 1 casilla)
+_GUARD_PROTECT_RANGE = 1
 
 
 class Guard:
@@ -257,21 +263,19 @@ class Guard:
 
         biases = {a: 0.0 for a in ACTIONS}
 
+        '''
         # HUIR: domina si está en peligro personal
         if i_am_in_danger:
             biases['FLEE'] += HEUR_GUARD_FLEE_DANGER
-
         # DEFENDER: prioridad si aliado en peligro y el guardia no está en peligro
-        if ally_in_danger:
+        elif ally_in_danger:
             biases['DEFEND'] += HEUR_GUARD_DEFEND_ALLY
+        elif can_attack and hunter_near:
+            biases['ATTACK'] += HEUR_GUARD_ATTACK
 
-        if not ally_in_danger:
-            if can_attack and hunter_near:
-                biases['ATTACK'] += HEUR_GUARD_ATTACK
-        
         # EXPLORAR: comportamiento base
         biases['EXPLORE'] += HEUR_GUARD_EXPLORE_BASE
-
+        '''
         return biases
 
     # ===================================================================
@@ -500,14 +504,6 @@ class Guard:
             # Sin opciones: se queda en posición actual
             return []
 
-    def execute_attack(self, target):
-        """Verifica ataque (el hit real lo resuelve el environment)."""
-        if target is None or not target.is_alive:
-            return False
-        px, py = self.position
-        dist = abs(target.position[0] - px) + abs(target.position[1] - py)
-        return dist <= self.attack_range and self.current_cooldown == 0
-
     # ===================================================================
     # COMBATE
     # ===================================================================
@@ -614,57 +610,71 @@ class Guard:
 
     def _find_best_explore_cell(self):
         """
-        Mejor celda frontera a explorar.
-        Criterios:
-          + Celdas desconocidas alrededor (más = mejor)
-          - Distancia al guardia (menos = mejor)
-          + Distancia mínima a otros aliados (más lejos = más valioso)
-          - Riesgo (más negativo = más seguro = mejor)
+        En modo EXPLORE el guardia elige una posición dentro de un radio máximo
+        GUARD_EXPLORE_MAX_RADIUS (Manhattan) de algún recolector.
+
+        Puntuación de cada celda candidata:
+          + Cercanía ponderada a recolectores:
+              sin recursos  → peso GUARD_EXPLORE_WEIGHT_EMPTY
+              con recursos  → peso GUARD_EXPLORE_WEIGHT_RES
+              con kit       → peso GUARD_EXPLORE_WEIGHT_KIT
+            (usando 1/(1+dist) para que celdas más cercanas puntúen más)
+          + Lejanía al guardia más cercano (excluye a sí mismo):
+            incentiva distribuirse y cubrir mayor área
+
+        Si no hay recolectores vivos, retorna None.
         """
+        if not self._all_collectors:
+            return None
+
         px, py = self.position
-        all_allies = self._all_collectors + [
-            g for g in self._all_guards if g is not self
-        ]
+        other_guards = [g for g in self._all_guards if g is not self]
+
+        # Peso de cada recolector según su estado
+        collector_weights = []
+        for c in self._all_collectors:
+            if c.has_build_kit:
+                w = GUARD_EXPLORE_WEIGHT_KIT
+            elif c.carrying_resources > 0:
+                w = GUARD_EXPLORE_WEIGHT_RES
+            else:
+                w = GUARD_EXPLORE_WEIGHT_EMPTY
+            collector_weights.append((c, w))
 
         best_cell  = None
         best_score = float('-inf')
 
         for x in range(MAP_WIDTH):
             for y in range(MAP_HEIGHT):
-                if self.known_map[x][y].get('explored', False):
-                    continue
-                is_frontier = any(
-                    0 <= x + ddx < MAP_WIDTH and 0 <= y + ddy < MAP_HEIGHT
-                    and self.known_map[x + ddx][y + ddy].get('explored', False)
-                    for ddx, ddy in [(1, 0), (-1, 0), (0, 1), (0, -1)]
+                # Descartar celdas fuera del radio máximo de TODOS los recolectores
+                min_collector_dist = min(
+                    abs(x - c.position[0]) + abs(y - c.position[1])
+                    for c, _ in collector_weights
                 )
-                if not is_frontier:
+                if min_collector_dist > GUARD_EXPLORE_MAX_RADIUS:
                     continue
 
-                unknown_count = sum(
-                    1
-                    for ddx in range(-4, 5) for ddy in range(-4, 5)
-                    if abs(ddx) + abs(ddy) <= 4
-                    and 0 <= x + ddx < MAP_WIDTH and 0 <= y + ddy < MAP_HEIGHT
-                    and not self.known_map[x + ddx][y + ddy].get('explored', False)
+                # No elegir la celda actual del guardia
+                if (x, y) == (px, py):
+                    continue
+
+                # Cercanía ponderada a recolectores
+                collector_score = sum(
+                    w / (1.0 + abs(x - c.position[0]) + abs(y - c.position[1]))
+                    for c, w in collector_weights
                 )
 
-                dist_to_me = abs(x - px) + abs(y - py)
-
-                if all_allies:
-                    min_ally_dist = min(
-                        abs(x - a.position[0]) + abs(y - a.position[1])
-                        for a in all_allies
+                # Lejanía al guardia más cercano (mayor distancia = mejor cobertura)
+                if other_guards:
+                    min_guard_dist = min(
+                        abs(x - g.position[0]) + abs(y - g.position[1])
+                        for g in other_guards
                     )
                 else:
-                    min_ally_dist = MAP_WIDTH + MAP_HEIGHT
+                    min_guard_dist = 0
 
-                risk = self.risk_map[x][y]
-
-                score = (unknown_count * 5.0
-                         - dist_to_me * 0.5
-                         + min_ally_dist * 0.3
-                         - risk * 2.0)
+                score = (collector_score * GUARD_EXPLORE_COLLECTOR_W
+                         + min_guard_dist  * GUARD_EXPLORE_SPREAD_W)
 
                 if score > best_score:
                     best_score = score

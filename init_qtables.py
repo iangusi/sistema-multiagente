@@ -66,29 +66,26 @@ def _collector_best_actions(state):
     # 3. CONSTRUIR si tiene kit cerca
     if build_dist == 1:
         result.append(('BUILD_TOWER', Q_BEST))
-        if resource_dist > 0:
+        if resource_dist == 1:
             result.append(('GO_TO_RESOURCE', Q_SECOND))
         return result
-
-    # 4. IR_POR_RECURSO si hay recursos conocidos y puede cargar
-    if resource_dist > 0 and can_carry == 1:
-        result.append(('GO_TO_RESOURCE', Q_BEST))
-        if build_dist > 0:
-            result.append(('BUILD_TOWER', Q_SECOND))
-        elif explore_dist > 0:
-            result.append(('EXPLORE', Q_SECOND))
+    
+    # 4 CONSTRUIR si tiene kit (aunque lejos)
+    if build_dist == 2:
+        result.append(('BUILD_TOWER', Q_SECOND))
+        if resource_dist == 1:
+            result.append(('GO_TO_RESOURCE', Q_BEST))
         return result
 
-    # 5. CONSTRUIR si tiene kit (aunque lejos)
-    if build_dist > 0:
-        result.append(('BUILD_TOWER', Q_BEST))
+    # 5. IR_POR_RECURSO si hay recursos conocidos y puede cargar
+    if resource_dist > 0:
+        result.append(('GO_TO_RESOURCE', Q_BEST))
         if explore_dist > 0:
             result.append(('EXPLORE', Q_SECOND))
         return result
 
     # 6. EXPLORAR en otros casos
-    if explore_dist > 0:
-        result.append(('EXPLORE', Q_BEST))
+    result.append(('EXPLORE', Q_BEST))
 
     return result
 
@@ -127,31 +124,29 @@ def _guard_best_actions(state):
     """
     Retorna [(accion, q_value)] en orden de prioridad.
     Lógica:
-      1. ATTACK si puede atacar (domina siempre)
-      2. FLEE si está en peligro personal sin poder atacar
-      3. DEFEND si aliado en peligro
+      1. FLEE si está en peligro personal sin poder atacar
+      2. DEFEND si aliado en peligro
+      3. ATTACK si puede atacar
       4. EXPLORE en otros casos
     """
     ally_in_danger, i_am_in_danger, hunter_near, can_attack = state
     result = []
 
+    # 1. HUIR si en peligro personal
+    if (i_am_in_danger or hunter_near) and not can_attack:
+        result.append(('FLEE', Q_BEST))
+        return result
+   
+    # 2. ATACAR domina si puede hacerlo
+    if hunter_near and can_attack:
+        result.append(('ATTACK', Q_BEST))
+        if ally_in_danger:
+            result.append(('DEFEND', Q_SECOND))
+        return result
+    
     # 3. DEFENDER si aliado en peligro
     if ally_in_danger:
         result.append(('DEFEND', Q_BEST))
-        if hunter_near:
-            result.append(('FLEE', Q_SECOND))
-        return result
-
-    # 1. ATACAR domina si puede hacerlo
-    if hunter_near and can_attack:
-        result.append(('ATTACK', Q_BEST))
-        return result
-
-    # 2. HUIR si en peligro personal
-    if i_am_in_danger:
-        result.append(('FLEE', Q_BEST))
-        if ally_in_danger:
-            result.append(('DEFEND', Q_SECOND))
         return result
 
     # 4. EXPLORAR por defecto
