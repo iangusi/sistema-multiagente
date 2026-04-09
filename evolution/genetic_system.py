@@ -105,17 +105,20 @@ def calculate_fitness(kills, ticks_alive, deaths):
     return kills * 5 + ticks_alive - deaths
 
 
-def random_spawn_position(map_width, map_height, base_pos=None, min_dist=0):
+def random_spawn_position(map_width, map_height, base_pos=None, min_dist=0,
+                           exclude_zones=None):
     """
     Retorna una posición aleatoria en los bordes del mapa (zona de spawn
-    de cazadores), opcionalmente a una distancia Manhattan mínima de la base.
+    de cazadores), respetando distancias mínimas a zonas de exclusión.
 
     Parámetros
     ----------
-    map_width  : int — ancho del mapa (columnas)
-    map_height : int — alto del mapa (filas)
-    base_pos   : tuple | None — posición de la base del Equipo A
-    min_dist   : int — distancia Manhattan mínima desde base_pos (0 = sin límite)
+    map_width     : int — ancho del mapa (columnas)
+    map_height    : int — alto del mapa (filas)
+    base_pos      : tuple | None — posición de la base del Equipo A
+    min_dist      : int — distancia Manhattan mínima desde base_pos (0 = sin límite)
+    exclude_zones : list[((x,y), min_d)] | None — zonas adicionales a evitar;
+                    cada entrada es (posición, distancia_mínima)
 
     Retorna
     -------
@@ -132,15 +135,30 @@ def random_spawn_position(map_width, map_height, base_pos=None, min_dist=0):
         else:            # borde derecho
             return (map_width - 1, random.randint(0, map_height - 1))
 
-    if base_pos is None or min_dist <= 0:
-        return _candidate()
+    def _valid(pos):
+        # Restricción: distancia a la base
+        if base_pos is not None and min_dist > 0:
+            if abs(pos[0] - base_pos[0]) + abs(pos[1] - base_pos[1]) < min_dist:
+                return False
+        # Restricciones adicionales (recolectores, guardias, etc.)
+        if exclude_zones:
+            for zone_pos, zone_dist in exclude_zones:
+                if abs(pos[0] - zone_pos[0]) + abs(pos[1] - zone_pos[1]) < zone_dist:
+                    return False
+        return True
 
-    # Intentar hasta 200 veces encontrar una posición suficientemente lejos
+    # Intentar hasta 200 veces encontrar una posición válida
     for _ in range(200):
         pos = _candidate()
-        dist = abs(pos[0] - base_pos[0]) + abs(pos[1] - base_pos[1])
-        if dist >= min_dist:
+        if _valid(pos):
             return pos
 
-    # Fallback: cualquier posición de borde (no debería ocurrir salvo mapas muy pequeños)
+    # Fallback: relajar solo las zonas de aliados (mantener distancia a base si es posible)
+    for _ in range(200):
+        pos = _candidate()
+        if base_pos is None or min_dist <= 0:
+            return pos
+        if abs(pos[0] - base_pos[0]) + abs(pos[1] - base_pos[1]) >= min_dist:
+            return pos
+
     return _candidate()

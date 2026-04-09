@@ -9,6 +9,7 @@ from utils.constants import (
     BUILD_KIT_COST,
     NUM_COLLECTORS, NUM_GUARDS, NUM_HUNTERS,
     HUNTER_MIN_SPAWN_DISTANCE,
+    HUNTER_MIN_SPAWN_DISTANCE_ALLY,
     RISK_GUARD, RISK_TOWER, RISK_COLLECTOR, RISK_HUNTER,
     RISK_PROPAGATION_RANGE, RISK_MEMORY_TICKS, RISK_DECAY,
     QL_ALPHA, QL_GAMMA, QL_EPSILON, QL_EPSILON_DECAY, QL_EPSILON_MIN,
@@ -306,11 +307,15 @@ class Environment:
         # 10. APLICAR DAÑO y procesar muertes
         self._resolve_combat(attacks, pending_damage)
 
-        # 11. RESPAWN de cazadores muertos (con distancia mínima a la base)
+        # 11. RESPAWN de cazadores muertos (distancia mínima a base y a aliados vivos)
+        ally_agents = [a for a in self.collectors + self.guards if a.is_alive]
         for h in self.hunters:
             if not h.is_alive:
-                revived = h.try_respawn(MAP_WIDTH, MAP_HEIGHT,
-                                        BASE_POSITION, HUNTER_MIN_SPAWN_DISTANCE)
+                revived = h.try_respawn(
+                    MAP_WIDTH, MAP_HEIGHT,
+                    BASE_POSITION, HUNTER_MIN_SPAWN_DISTANCE,
+                    ally_agents, HUNTER_MIN_SPAWN_DISTANCE_ALLY,
+                )
                 if revived:
                     self.cells[h.position[0]][h.position[1]].agents.append(h)
                     self.last_event = 'Cazador reaparece'

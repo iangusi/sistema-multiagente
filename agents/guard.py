@@ -183,16 +183,20 @@ class Guard:
     def _compute_danger(self, agent, hunter_positions, all_guards, is_collector):
         """
         Calcula el peligro de un agente aliado.
-        Busca cazadores en radio 4 alrededor de la POSICIÓN DEL ALIADO.
+        Busca cazadores (posiciones recientes filtradas) en radio 4 alrededor del aliado.
         Recolector: 0 + 3×(cazadores_a_≤4_celdas) - 2×(guardias_a_≤4_celdas)
         Guardia:   −1 + 1×(cazadores_a_≤4_celdas)
+        hunter_positions: lista de (x,y) ya filtrada por antigüedad (de _hunter_positions_recent).
         """
         ax, ay = agent.position
 
-        # Contar cazadores EN RANGO 4 DE LA POSICIÓN DEL ALIADO
+        # Contar cazadores EN RANGO 4 DE LA POSICIÓN DEL ALIADO usando posiciones recientes
+        if hunter_positions is None:
+            hunter_positions = [e['position'] for e in self.last_seen_enemies]
+
         cazadores_cerca = sum(
-            1 for hp in self.last_seen_enemies  # Usar last_seen_enemies, no hunter_positions param
-            if abs(hp['position'][0] - ax) + abs(hp['position'][1] - ay) <= _DANGER_RANGE
+            1 for hpos in hunter_positions
+            if abs(hpos[0] - ax) + abs(hpos[1] - ay) <= _DANGER_RANGE
         )
 
         if is_collector:
@@ -205,10 +209,11 @@ class Guard:
         else:
             # Guardia
             return -1 + 1 * cazadores_cerca
-    
+
     def _compute_all_dangers(self, all_collectors, all_guards, hunter_positions):
         """
         Retorna dict {agent: danger} para todos los aliados vivos.
+        hunter_positions: lista de (x,y) filtrada por antigüedad.
         """
         dangers = {}
         for c in all_collectors:
@@ -263,7 +268,6 @@ class Guard:
 
         biases = {a: 0.0 for a in ACTIONS}
 
-        '''
         # HUIR: domina si está en peligro personal
         if i_am_in_danger:
             biases['FLEE'] += HEUR_GUARD_FLEE_DANGER
@@ -275,7 +279,7 @@ class Guard:
 
         # EXPLORAR: comportamiento base
         biases['EXPLORE'] += HEUR_GUARD_EXPLORE_BASE
-        '''
+
         return biases
 
     # ===================================================================
@@ -589,19 +593,19 @@ class Guard:
         Retorna el aliado (no yo mismo) con mayor nivel de peligro > 0.
         Retorna None si ninguno está en peligro.
         """
-        # Ya no necesita hunter_positions porque _compute_danger usa self.last_seen_enemies
+        hunter_positions = self._hunter_positions_recent(current_tick)
         best_agent  = None
         best_danger = 0  # solo nos interesan los que tienen peligro > 0
 
         for c in self._all_collectors:
-            d = self._compute_danger(c, None, self._all_guards, True)
+            d = self._compute_danger(c, hunter_positions, self._all_guards, True)
             if d > best_danger:
                 best_danger = d
                 best_agent  = c
 
         for g in self._all_guards:
             if g is not self:
-                d = self._compute_danger(g, None, self._all_guards, False)
+                d = self._compute_danger(g, hunter_positions, self._all_guards, False)
                 if d > best_danger:
                     best_danger = d
                     best_agent  = g

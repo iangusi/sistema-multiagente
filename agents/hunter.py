@@ -787,10 +787,13 @@ class Hunter:
         self.current_state  = 'WANDER'
 
     def try_respawn(self, map_width, map_height,
-                    base_pos=None, min_dist=0):
+                    base_pos=None, min_dist=0,
+                    ally_agents=None, min_dist_ally=0):
         """
         Reduce el timer de respawn. Si llega a 0, revive al cazador:
-        - Nueva posición en borde del mapa (respetando distancia mínima a la base)
+        - Nueva posición en borde del mapa respetando:
+            · distancia mínima a la base (min_dist)
+            · distancia mínima a cada recolector y guardia vivo (min_dist_ally)
         - Genes mutados respecto a la vida anterior
         - Stats reseteados a base
 
@@ -801,9 +804,19 @@ class Hunter:
 
         self.respawn_timer -= 1
         if self.respawn_timer <= 0:
-            self.genes       = mutate(self.genes)
+            self.genes = mutate(self.genes)
+
+            exclude_zones = None
+            if ally_agents and min_dist_ally > 0:
+                exclude_zones = [
+                    (a.position, min_dist_ally)
+                    for a in ally_agents
+                    if a.is_alive
+                ]
+
             self.position    = random_spawn_position(map_width, map_height,
-                                                     base_pos, min_dist)
+                                                     base_pos, min_dist,
+                                                     exclude_zones)
             self.next_position = self.position
             self.is_alive    = True
             self.current_hp  = self.base_hp

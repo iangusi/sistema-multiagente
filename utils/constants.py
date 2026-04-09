@@ -72,6 +72,7 @@ HUNTER_MAX_HP = 3       # base * 3
 # Respawn
 HUNTER_RESPAWN_TICKS = 15
 HUNTER_MIN_SPAWN_DISTANCE = 15  # distancia mínima Manhattan desde la base al respawnear
+HUNTER_MIN_SPAWN_DISTANCE_ALLY = 10  # distancia mínima desde cualquier recolector o guardia vivo
 
 # ============================================================
 # TORRE

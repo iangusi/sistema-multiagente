@@ -1,3 +1,5 @@
+import random
+
 from utils.constants import (
     COLLECTOR_HP,
     COLLECTOR_SPEED,
@@ -93,6 +95,11 @@ class Collector:
 
         # Referencia al grid (actualizada en decide)
         self._last_grid = None
+
+        # Target de navegación cacheado (desacoplado del target de estado RL)
+        # Solo se recalcula cuando el path se agota o cambia la acción.
+        self._nav_target = None
+        self._nav_action = None
 
         # Para cálculo de recompensas de acercamiento
         self._prev_dist_explore  = None
@@ -319,14 +326,27 @@ class Collector:
     # ESTADO RL (5 variables)
     # ===================================================================
 
+    def _estimate_explore_dist(self, all_collectors, all_guards):
+        """
+        Estima explore_dist para el estado RL en O(1) si hay un nav_target cacheado,
+        o hace el scan completo si no hay ninguno aún.
+        """
+        px, py = self.position
+        ref = self._nav_target if (self._nav_action == 'EXPLORE' and self._nav_target is not None) \
+              else self._find_best_explore_cell(all_collectors, all_guards)
+        if ref is None:
+            return 0
+        d = abs(ref[0] - px) + abs(ref[1] - py)
+        return 1 if d <= _DIST_EXPLORE_CLOSE else 2
+
     def build_state(self, visible_enemies, visible_allies,
-                    best_build_cell, best_explore_cell, best_resource):
+                    best_build_cell, best_resource, all_collectors, all_guards):
         """
         Tupla discreta de 5 variables para Q-learning:
           (build_dist, explore_dist, resource_dist, can_carry, hunter_near)
 
         build_dist:    0=sin kit, 1=kit cerca(<=5), 2=kit lejos(>5)
-        explore_dist:  0=sin frontera, 1=cerca(<=8), 2=lejos(>8)
+        explore_dist:  0=sin frontera, 1=cerca(<=8), 2=lejos(>8)  — usa nav_target cacheado
         resource_dist: 0=sin recursos, 1=cerca(<=5), 2=lejos(>5)
         can_carry:     0=lleno, 1=puede cargar más
         hunter_near:   0=no, 1=sí
@@ -340,12 +360,8 @@ class Collector:
             d = abs(best_build_cell[0] - px) + abs(best_build_cell[1] - py)
             build_dist = 1 if d <= _DIST_BUILD_CLOSE else 2
 
-        # Explore
-        if best_explore_cell is None:
-            explore_dist = 0
-        else:
-            d = abs(best_explore_cell[0] - px) + abs(best_explore_cell[1] - py)
-            explore_dist = 1 if d <= _DIST_EXPLORE_CLOSE else 2
+        # Explore: usa nav_target cacheado cuando es posible (O(1)), scan completo solo si no hay
+        explore_dist = self._estimate_explore_dist(all_collectors, all_guards)
 
         # Resource
         if best_resource is None:
@@ -370,7 +386,7 @@ class Collector:
         build_dist, explore_dist, resource_dist, can_carry, hunter_near = state
 
         biases = {a: 0.0 for a in ACTIONS}
-        '''
+
         # HUIR: domina cuando hay cazador visible
         if hunter_near:
             biases['FLEE'] += HEUR_FLEE_HUNTER
@@ -383,7 +399,7 @@ class Collector:
         # IR_POR_RECURSO: se promueve si hay recursos conocidos y puede cargar
         elif resource_dist > 0:
             biases['GO_TO_RESOURCE'] += HEUR_GOTO_RESOURCE_BASE
-        '''
+
         return biases
 
     # ===================================================================
@@ -668,7 +684,13 @@ class Collector:
     def decide(self, grid, current_tick, all_collectors, all_guards=None):
         """
         Ciclo completo por tick:
-        percibir → calcular objetivos → construir estado → biases → acción
+        percibir → calcular objetivos → construir estado → biases → acción → navegar
+
+        A* solo se recalcula cuando:
+          - Cambia la acción
+          - El path se agotó (llegó al destino o era inalcanzable)
+          - Acción FLEE (ruta dinámica por definición)
+        Para EXPLORE, el nav_target se cachea en _nav_target hasta que el path se agote.
         """
         self._last_grid = grid
         if not self.is_alive:
@@ -679,21 +701,29 @@ class Collector:
 
         visible_enemies, _, visible_allies = self.perceive(grid, current_tick)
 
-        # Pre-computar objetivos (usados tanto para estado como para ejecución)
-        best_build_cell   = self._find_best_build_cell() if self.has_build_kit else None
-        best_explore_cell = self._find_best_explore_cell(all_collectors, all_guards)
-        best_resource     = self._find_closest_resource()
+        # Si perdió el kit (torre construida o muerte), limpiar estado de construcción
+        if not self.has_build_kit:
+            self.build_target = None
+            if self._nav_action == 'BUILD_TOWER':
+                self._nav_target = None
+                self._nav_action = None
+                self.current_path = []
+
+        # Objetivos baratos: recurso más cercano (O(k)) y build_cell solo si tiene kit
+        best_resource   = self._find_closest_resource()
+        best_build_cell = self._find_best_build_cell() if self.has_build_kit else None
 
         # Regla directa: si está en la mejor celda de construcción, señalizar
         self.wants_to_build = False
         if self.has_build_kit and best_build_cell is not None and self.position == best_build_cell:
             self.wants_to_build = True
-            # También actualizar build_target para que el environment lo valide
             self.build_target = best_build_cell
 
+        # Estado RL — explore_dist usa nav_target cacheado (O(1)) o scan completo solo la primera vez
         state = self.build_state(
             visible_enemies, visible_allies,
-            best_build_cell, best_explore_cell, best_resource
+            best_build_cell, best_resource,
+            all_collectors, all_guards,
         )
 
         hunter_near = state[4]
@@ -701,37 +731,93 @@ class Collector:
 
         # Q-update con transición anterior + recompensa de paso + eventos pendientes
         if self.prev_state is not None and self.prev_action is not None:
+            # Para la recompensa de acercamiento a exploración se usa el nav_target cacheado
+            cached_explore = (self._nav_target if self._nav_action == 'EXPLORE' else None)
             step_reward = self._compute_step_reward(
                 self.prev_action, visible_allies, hunter_near,
-                best_explore_cell, best_resource, best_build_cell
+                cached_explore, best_resource, best_build_cell,
             )
             step_reward += self._pending_reward
             self._pending_reward = 0.0
             self.q_learning.update(self.prev_state, self.prev_action, step_reward, state)
 
+        prev_action = self.current_action  # guardar ANTES de sobrescribir
         action = self.q_learning.get_action(state, biases)
         self.current_action = action
         self.prev_state     = state
         self.prev_action    = action
 
-        # Guardar distancias para siguiente tick
-        self._update_prev_distances(best_explore_cell, best_resource, best_build_cell)
+        # Guardar distancias para siguiente tick (usa nav_target cacheado para explore)
+        cached_explore = (self._nav_target if self._nav_action == 'EXPLORE' else None)
+        self._update_prev_distances(cached_explore, best_resource, best_build_cell)
 
-        # Ejecutar acción
-        if action == 'EXPLORE':
-            self.current_path = self.execute_explore(best_explore_cell)
-        elif action == 'GO_TO_RESOURCE':
-            self.current_path = self.execute_go_to_resource(best_resource, all_collectors)
-        elif action == 'RETURN_TO_BASE':
-            self.current_path = self.execute_return_to_base()
-        elif action == 'FLEE':
+        # ---------------------------------------------------------------
+        # NAVEGACIÓN: A* solo cuando es necesario
+        # ---------------------------------------------------------------
+        action_changed = (action != prev_action)
+        path_empty     = not self.current_path
+
+        if action == 'FLEE':
+            # Siempre recalcula: la ruta segura depende de posiciones dinámicas
             self.current_path = self.execute_flee(visible_enemies, all_guards)
-        elif action == 'BUILD_TOWER':
-            self.current_path = self.execute_build_tower(best_build_cell)
+
+        elif action_changed or path_empty:
+            # Recalcular A* y actualizar nav_target
+            if action == 'EXPLORE':
+                # Scan completo O(N²) solo aquí, no en cada tick
+                new_nav = self._find_best_explore_cell(all_collectors, all_guards)
+                self._nav_target = new_nav
+                self._nav_action = 'EXPLORE'
+                self.current_target = new_nav
+                self.current_path = self.execute_explore(new_nav)
+
+            elif action == 'GO_TO_RESOURCE':
+                nav = best_resource['position'] if best_resource else None
+                self._nav_target = nav
+                self._nav_action = 'GO_TO_RESOURCE'
+                self.current_target = nav
+                self.current_path = self.execute_go_to_resource(best_resource, all_collectors)
+
+            elif action == 'RETURN_TO_BASE':
+                self._nav_target = BASE_POSITION
+                self._nav_action = 'RETURN_TO_BASE'
+                self.current_target = BASE_POSITION
+                self.current_path = self.execute_return_to_base()
+
+            elif action == 'BUILD_TOWER':
+                nav = self.build_target or best_build_cell
+                self._nav_target = nav
+                self._nav_action = 'BUILD_TOWER'
+                self.current_target = nav
+                self.current_path = self.execute_build_tower(best_build_cell)
+
+        # Si la acción no cambió y el path sigue vivo → avanzar sin recalcular nada
 
         if self.current_path:
             self.next_position = self.current_path.pop(0)
         else:
             self.next_position = self.position
+
+        # Anti-stall: si el collector se quedaría quieto y NO está sobre un recurso
+        # ni esperando construir una torre, forzar un movimiento aleatorio.
+        if self.next_position == self.position:
+            px, py = self.position
+            on_resource = (
+                self._last_grid is not None
+                and self._last_grid.cells[px][py].type == 'resource'
+                and self._last_grid.cells[px][py].resource_amount > 0
+            )
+            if not on_resource and not self.wants_to_build:
+                candidates = [
+                    (px + 1, py), (px - 1, py), (px, py + 1), (px, py - 1)
+                ]
+                valid = [
+                    (nx, ny) for nx, ny in candidates
+                    if (0 <= nx < MAP_WIDTH and 0 <= ny < MAP_HEIGHT
+                        and self._last_grid.cells[nx][ny].type != 'obstacle'
+                        and self.known_map[nx][ny].get('explored', False))
+                ]
+                if valid:
+                    self.next_position = random.choice(valid)
 
         return self.next_position
